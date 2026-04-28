@@ -5,6 +5,7 @@ import '../../../core/models/form_models.dart';
 import '../../../core/models/process_tracking_models.dart';
 import '../../../core/widgets/app_widgets.dart';
 import '../data/client_tracking_repository.dart';
+import 'client_bpmn_viewer_screen.dart';
 
 final clientTrackingProvider = FutureProvider.family.autoDispose<ClientInstanceTracking, String>((ref, processInstanceId) {
   return ref.read(clientTrackingRepositoryProvider).getTracking(processInstanceId);
@@ -85,6 +86,28 @@ class ClientTrackingScreen extends ConsumerWidget {
                           ),
                         ],
                       ),
+                      if ((tracking.xmlBpmn ?? '').trim().isNotEmpty) ...[
+                        const SizedBox(height: 18),
+                        Align(
+                          alignment: Alignment.centerLeft,
+                          child: FilledButton.icon(
+                            onPressed: () {
+                              Navigator.of(context).push(
+                                MaterialPageRoute(
+                                  builder: (_) => ClientBpmnViewerScreen(
+                                    xmlBpmn: tracking.xmlBpmn!,
+                                    title: tracking.processName?.trim().isNotEmpty == true
+                                        ? tracking.processName!
+                                        : 'Diagrama BPMN',
+                                  ),
+                                ),
+                              );
+                            },
+                            icon: const Icon(Icons.account_tree_outlined),
+                            label: const Text('Ver diagrama'),
+                          ),
+                        ),
+                      ],
                     ],
                   ),
                 ),
