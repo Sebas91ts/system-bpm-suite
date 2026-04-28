@@ -1,9 +1,12 @@
+import 'dart:async';
+
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:flutter_localizations/flutter_localizations.dart';
 
 import '../core/widgets/app_widgets.dart';
 import '../core/storage/app_preferences.dart';
+import '../core/push/push_providers.dart';
 import '../features/auth/presentation/auth_controller.dart';
 import '../features/auth/presentation/login_screen.dart';
 import '../features/home/presentation/client_shell.dart';
@@ -51,6 +54,7 @@ class _AuthGateState extends ConsumerState<_AuthGate> {
     WidgetsBinding.instance.addPostFrameCallback((_) {
       ref.read(authControllerProvider.notifier).bootstrap();
       ref.read(appPreferencesProvider).bootstrap();
+      unawaited(ref.read(clientPushServiceProvider).initialize());
     });
   }
 

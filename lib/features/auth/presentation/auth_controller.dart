@@ -3,6 +3,8 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import '../../../core/models/auth_models.dart';
 import '../../../core/network/api_client.dart';
+import '../../../core/push/client_push_service.dart';
+import '../../../core/push/push_providers.dart';
 import '../../../core/storage/session_storage.dart';
 import '../data/auth_repository.dart';
 
@@ -10,6 +12,7 @@ final authControllerProvider = ChangeNotifierProvider<AuthController>((ref) {
   return AuthController(
     sessionStorage: ref.read(sessionStorageProvider),
     repository: ref.read(authRepositoryProvider),
+    pushService: ref.read(clientPushServiceProvider),
   );
 });
 
@@ -56,14 +59,17 @@ class AuthController extends ChangeNotifier {
   AuthController({
     required SessionStorage sessionStorage,
     required AuthRepository repository,
+    required ClientPushService pushService,
   })  : _sessionStorage = sessionStorage,
         _repository = repository,
+        _pushService = pushService,
         _state = AuthState.initial() {
     _sessionStorage.addListener(_handleStorageChanged);
   }
 
   final SessionStorage _sessionStorage;
   final AuthRepository _repository;
+  final ClientPushService _pushService;
   AuthState _state;
   bool _bootstrapped = false;
 
@@ -96,6 +102,7 @@ class AuthController extends ChangeNotifier {
 
       final currentUser = await _repository.me();
       if (!currentUser.isClient) {
+        await _pushService.unregisterAuthenticatedUser();
         await _sessionStorage.clearSession();
         _emit(AuthState(
           bootstrapping: false,
@@ -114,6 +121,7 @@ class AuthController extends ChangeNotifier {
           user: currentUser,
         ),
       );
+      await _pushService.syncAuthenticatedUser(currentUser);
 
       _emit(AuthState(
         bootstrapping: false,
@@ -141,6 +149,7 @@ class AuthController extends ChangeNotifier {
     try {
       final session = await _repository.login(email: email, password: password);
       if (!session.user.isClient) {
+        await _pushService.unregisterAuthenticatedUser();
         await _sessionStorage.clearSession();
         _emit(AuthState(
           bootstrapping: false,
@@ -152,6 +161,7 @@ class AuthController extends ChangeNotifier {
       }
 
       await _sessionStorage.saveSession(session);
+      await _pushService.syncAuthenticatedUser(session.user);
       _emit(AuthState(
         bootstrapping: false,
         loading: false,
@@ -171,6 +181,8 @@ class AuthController extends ChangeNotifier {
 
   Future<void> logout({bool remote = true}) async {
     _emit(_state.copyWith(loading: true, errorMessage: null));
+
+    await _pushService.unregisterAuthenticatedUser();
 
     if (remote) {
       await _repository.logout();

@@ -1,5 +1,8 @@
 import 'package:flutter/foundation.dart';
+import 'package:firebase_core/firebase_core.dart';
 import 'package:flutter_dotenv/flutter_dotenv.dart';
+
+import '../../firebase_options.dart';
 
 class AppConfig {
   static const String _overrideBaseUrl = String.fromEnvironment('API_BASE_URL', defaultValue: '');
@@ -19,6 +22,33 @@ class AppConfig {
     }
 
     return 'http://10.0.2.2:8080/api';
+  }
+
+  static bool get firebasePushEnabled {
+    final raw = dotenv.env['FIREBASE_ENABLED']?.trim().toLowerCase() ?? 'false';
+    return raw == 'true' || raw == '1' || raw == 'yes';
+  }
+
+  static FirebaseOptions? get firebaseOptions {
+    try {
+      return DefaultFirebaseOptions.currentPlatform;
+    } catch (_) {
+      final apiKey = dotenv.env['FIREBASE_API_KEY']?.trim() ?? '';
+      final appId = dotenv.env['FIREBASE_APP_ID']?.trim() ?? '';
+      final messagingSenderId = dotenv.env['FIREBASE_MESSAGING_SENDER_ID']?.trim() ?? '';
+      final projectId = dotenv.env['FIREBASE_PROJECT_ID']?.trim() ?? '';
+
+      if ([apiKey, appId, messagingSenderId, projectId].any((value) => value.isEmpty)) {
+        return null;
+      }
+
+      return FirebaseOptions(
+        apiKey: apiKey,
+        appId: appId,
+        messagingSenderId: messagingSenderId,
+        projectId: projectId,
+      );
+    }
   }
 
   static String _normalize(String value) {
