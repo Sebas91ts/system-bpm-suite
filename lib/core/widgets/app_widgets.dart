@@ -14,15 +14,21 @@ class AppCard extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
+    final theme = Theme.of(context);
+    final isDark = theme.brightness == Brightness.dark;
+    final backgroundColor = isDark ? const Color(0xFF0F172A) : Colors.white;
+    final borderColor = isDark ? Colors.white.withOpacity(0.08) : Colors.black.withOpacity(0.08);
+    final shadowColor = isDark ? const Color(0x33000000) : const Color(0x1A0F172A);
+
     return Container(
       margin: margin,
       decoration: BoxDecoration(
-        color: const Color(0xFF0F172A),
+        color: backgroundColor,
         borderRadius: BorderRadius.circular(24),
-        border: Border.all(color: Colors.white.withOpacity(0.08)),
-        boxShadow: const [
+        border: Border.all(color: borderColor),
+        boxShadow: [
           BoxShadow(
-            color: Color(0x33000000),
+            color: shadowColor,
             blurRadius: 24,
             offset: Offset(0, 12),
           ),
@@ -118,13 +124,16 @@ class EmptyStateView extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
+    final theme = Theme.of(context);
+    final color = theme.brightness == Brightness.dark ? Colors.white54 : Colors.black45;
+
     return Center(
       child: Padding(
         padding: const EdgeInsets.all(24),
         child: Column(
           mainAxisSize: MainAxisSize.min,
           children: [
-            Icon(icon, size: 56, color: Colors.white54),
+            Icon(icon, size: 56, color: color),
             const SizedBox(height: 16),
             Text(
               title,
@@ -135,7 +144,9 @@ class EmptyStateView extends StatelessWidget {
             Text(
               subtitle,
               textAlign: TextAlign.center,
-              style: Theme.of(context).textTheme.bodyMedium?.copyWith(color: Colors.white70),
+              style: Theme.of(context).textTheme.bodyMedium?.copyWith(
+                    color: theme.brightness == Brightness.dark ? Colors.white70 : Colors.black54,
+                  ),
             ),
             if (action != null) ...[
               const SizedBox(height: 20),

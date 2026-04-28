@@ -3,11 +3,21 @@ import 'dart:convert';
 import 'package:flutter/material.dart';
 import 'package:webview_flutter/webview_flutter.dart';
 
+import '../../../core/i18n/app_strings.dart';
+
 class ClientBpmnViewerScreen extends StatefulWidget {
-  const ClientBpmnViewerScreen({super.key, required this.xmlBpmn, this.title = 'Diagrama'});
+  const ClientBpmnViewerScreen({
+    super.key,
+    required this.xmlBpmn,
+    this.title = '',
+    this.hintLabel = '',
+    this.localeCode = 'es',
+  });
 
   final String xmlBpmn;
   final String title;
+  final String hintLabel;
+  final String localeCode;
 
   @override
   State<ClientBpmnViewerScreen> createState() => _ClientBpmnViewerScreenState();
@@ -36,6 +46,8 @@ class _ClientBpmnViewerScreenState extends State<ClientBpmnViewerScreen> {
   }
 
   String _buildHtml(String xmlBpmn) {
+    final hintLabel = widget.hintLabel.trim().isNotEmpty ? widget.hintLabel : AppStrings.diagramHint(widget.localeCode);
+    final errorLabel = AppStrings.diagramError(widget.localeCode);
     final encodedXml = jsonEncode(xmlBpmn);
     return '''
 <!DOCTYPE html>
@@ -77,7 +89,7 @@ class _ClientBpmnViewerScreenState extends State<ClientBpmnViewerScreen> {
   <script src="https://unpkg.com/bpmn-js@18.3.1/dist/bpmn-viewer.development.js"></script>
 </head>
 <body>
-  <div class="hint">Diagrama BPMN</div>
+  <div class="hint">$hintLabel</div>
   <div id="canvas"></div>
   <script>
     const xml = $encodedXml;
@@ -89,7 +101,7 @@ class _ClientBpmnViewerScreenState extends State<ClientBpmnViewerScreen> {
         canvas.zoom('fit-viewport', 'auto');
       })
       .catch((error) => {
-        document.body.innerHTML = '<pre style="color:#fff;padding:16px;white-space:pre-wrap;">No se pudo cargar el diagrama\\n' + error + '</pre>';
+        document.body.innerHTML = '<pre style="color:#fff;padding:16px;white-space:pre-wrap;">$errorLabel\\n' + error + '</pre>';
       });
   </script>
 </body>

@@ -1,6 +1,8 @@
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
+import '../../../core/i18n/app_strings.dart';
+import '../../../core/storage/app_preferences.dart';
 import '../../../core/widgets/app_widgets.dart';
 import 'auth_controller.dart';
 
@@ -27,6 +29,8 @@ class _LoginScreenState extends ConsumerState<LoginScreen> {
 
   @override
   Widget build(BuildContext context) {
+    final prefs = ref.watch(appPreferencesProvider);
+    final locale = prefs.localeCode;
     final authState = ref.watch(authControllerProvider).state;
     final controller = ref.read(authControllerProvider.notifier);
     final errorMessage = widget.forceMessage ?? authState.errorMessage;
@@ -54,7 +58,7 @@ class _LoginScreenState extends ConsumerState<LoginScreen> {
                       crossAxisAlignment: CrossAxisAlignment.stretch,
                       children: [
                         Text(
-                          'Portal Clientes',
+                          AppStrings.loginTitle(locale),
                           style: Theme.of(context).textTheme.labelLarge?.copyWith(
                                 color: const Color(0xFF67E8F9),
                                 letterSpacing: 3,
@@ -62,12 +66,12 @@ class _LoginScreenState extends ConsumerState<LoginScreen> {
                         ),
                         const SizedBox(height: 8),
                         Text(
-                          'Acceso a tu aplicacion movil',
+                          AppStrings.loginSubtitle(locale),
                           style: Theme.of(context).textTheme.headlineMedium?.copyWith(fontSize: 30),
                         ),
                         const SizedBox(height: 8),
                         Text(
-                          'Inicia sesion para revisar tus tramites, tareas y notificaciones.',
+                          AppStrings.loginDescription(locale),
                           style: Theme.of(context).textTheme.bodyMedium,
                         ),
                         if (errorMessage != null && errorMessage.trim().isNotEmpty) ...[
@@ -78,16 +82,16 @@ class _LoginScreenState extends ConsumerState<LoginScreen> {
                         TextFormField(
                           controller: _emailController,
                           keyboardType: TextInputType.emailAddress,
-                          decoration: const InputDecoration(
-                            labelText: 'Correo electronico',
-                            hintText: 'cliente@correo.com',
+                          decoration: InputDecoration(
+                            labelText: AppStrings.emailLabel(locale),
+                            hintText: AppStrings.emailHint(locale),
                           ),
                           validator: (value) {
                             if (value == null || value.trim().isEmpty) {
-                              return 'Ingresa tu correo.';
+                              return AppStrings.enterEmail(locale);
                             }
                             if (!value.contains('@')) {
-                              return 'Ingresa un correo valido.';
+                              return AppStrings.validEmail(locale);
                             }
                             return null;
                           },
@@ -96,19 +100,19 @@ class _LoginScreenState extends ConsumerState<LoginScreen> {
                         TextFormField(
                           controller: _passwordController,
                           obscureText: true,
-                          decoration: const InputDecoration(
-                            labelText: 'Contrasena',
+                          decoration: InputDecoration(
+                            labelText: AppStrings.passwordLabel(locale),
                           ),
                           validator: (value) {
                             if (value == null || value.trim().isEmpty) {
-                              return 'Ingresa tu contrasena.';
+                              return AppStrings.enterPassword(locale);
                             }
                             return null;
                           },
                         ),
                         const SizedBox(height: 22),
                         AppPrimaryButton(
-                          label: 'Entrar',
+                          label: AppStrings.enter(locale),
                           isLoading: authState.loading,
                           onPressed: () async {
                             if (!_formKey.currentState!.validate()) {
@@ -124,7 +128,7 @@ class _LoginScreenState extends ConsumerState<LoginScreen> {
                         ),
                         const SizedBox(height: 12),
                         Text(
-                          'Solo usuarios con rol CLIENT pueden entrar.',
+                          AppStrings.onlyClients(locale),
                           textAlign: TextAlign.center,
                           style: Theme.of(context).textTheme.bodySmall,
                         ),

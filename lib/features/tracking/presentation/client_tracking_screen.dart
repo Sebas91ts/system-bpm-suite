@@ -1,8 +1,10 @@
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
+import '../../../core/i18n/app_strings.dart';
 import '../../../core/models/form_models.dart';
 import '../../../core/models/process_tracking_models.dart';
+import '../../../core/storage/app_preferences.dart';
 import '../../../core/widgets/app_widgets.dart';
 import '../data/client_tracking_repository.dart';
 import 'client_bpmn_viewer_screen.dart';
@@ -18,10 +20,12 @@ class ClientTrackingScreen extends ConsumerWidget {
 
   @override
   Widget build(BuildContext context, WidgetRef ref) {
+    final prefs = ref.watch(appPreferencesProvider);
+    final locale = prefs.localeCode;
     final trackingAsync = ref.watch(clientTrackingProvider(processInstanceId));
 
     return Scaffold(
-      appBar: AppBar(title: const Text('Seguimiento')),
+      appBar: AppBar(title: Text(AppStrings.trackingTitle(locale))),
       body: RefreshIndicator(
         onRefresh: () async {
           ref.invalidate(clientTrackingProvider(processInstanceId));
@@ -30,7 +34,7 @@ class ClientTrackingScreen extends ConsumerWidget {
         child: trackingAsync.when(
           loading: () => ListView(
             children: [
-              SizedBox(height: 260, child: LoadingView(label: 'Cargando seguimiento...')),
+              SizedBox(height: 260, child: LoadingView(label: AppStrings.loadingTracking(locale))),
             ],
           ),
           error: (error, _) => ListView(
@@ -39,11 +43,11 @@ class ClientTrackingScreen extends ConsumerWidget {
               AppCard(
                 child: EmptyStateView(
                   icon: Icons.error_outline_rounded,
-                  title: 'No pudimos cargar el seguimiento',
+                  title: AppStrings.noTracking(locale),
                   subtitle: error.toString(),
                   action: FilledButton(
                     onPressed: () => ref.invalidate(clientTrackingProvider(processInstanceId)),
-                    child: const Text('Reintentar'),
+                    child: Text(AppStrings.retry(locale)),
                   ),
                 ),
               ),
@@ -59,7 +63,7 @@ class ClientTrackingScreen extends ConsumerWidget {
                     crossAxisAlignment: CrossAxisAlignment.start,
                     children: [
                       Text(
-                        'Seguimiento de tramite',
+                        AppStrings.trackingTitle(locale),
                         style: Theme.of(context).textTheme.labelLarge?.copyWith(
                               color: const Color(0xFF67E8F9),
                               letterSpacing: 2.5,
@@ -67,21 +71,21 @@ class ClientTrackingScreen extends ConsumerWidget {
                       ),
                       const SizedBox(height: 8),
                       Text(
-                        tracking.processName?.trim().isNotEmpty == true ? tracking.processName! : 'Tramite',
+                        tracking.processName?.trim().isNotEmpty == true ? tracking.processName! : AppStrings.process(locale),
                         style: Theme.of(context).textTheme.headlineMedium?.copyWith(fontSize: 28),
                       ),
                       const SizedBox(height: 10),
                       Text(
-                        'Revisa el avance, los pasos completados y lo que enviaste en tus tareas.',
+                        AppStrings.trackingSubtitle(locale),
                         style: Theme.of(context).textTheme.bodyMedium,
                       ),
                       const SizedBox(height: 18),
-                      Row(
+                          Row(
                         children: [
-                          _StatusBadge(label: tracking.estado ?? 'ACTIVA'),
+                          _StatusBadge(label: tracking.estado ?? AppStrings.activeLabel(locale)),
                           const SizedBox(width: 12),
                           Text(
-                            'Actualizacion: ${_formatDate(tracking.startedAt)}',
+                            '${AppStrings.updateLabel(locale)}: ${_formatDate(tracking.startedAt, locale)}',
                             style: Theme.of(context).textTheme.bodySmall,
                           ),
                         ],
@@ -98,13 +102,15 @@ class ClientTrackingScreen extends ConsumerWidget {
                                     xmlBpmn: tracking.xmlBpmn!,
                                     title: tracking.processName?.trim().isNotEmpty == true
                                         ? tracking.processName!
-                                        : 'Diagrama BPMN',
+                                        : AppStrings.diagramTitle(locale),
+                                    hintLabel: AppStrings.diagramHint(locale),
+                                    localeCode: locale,
                                   ),
                                 ),
                               );
                             },
                             icon: const Icon(Icons.account_tree_outlined),
-                            label: const Text('Ver diagrama'),
+                            label: Text(AppStrings.viewDiagram(locale)),
                           ),
                         ),
                       ],
@@ -116,29 +122,29 @@ class ClientTrackingScreen extends ConsumerWidget {
                   child: Column(
                     crossAxisAlignment: CrossAxisAlignment.start,
                     children: [
-                      Text('Resumen visual', style: Theme.of(context).textTheme.titleLarge),
+                      Text(AppStrings.summaryVisual(locale), style: Theme.of(context).textTheme.titleLarge),
                       const SizedBox(height: 14),
-                      _ProgressBar(value: tracking.progressPercentage ?? 0),
+                      _ProgressBar(value: tracking.progressPercentage ?? 0, localeCode: locale),
                       const SizedBox(height: 12),
                       Wrap(
                         spacing: 10,
                         runSpacing: 10,
                         children: [
-                          _LegendPill(color: const Color(0xFF3B82F6), label: 'Activa'),
-                          _LegendPill(color: const Color(0xFF10B981), label: 'Finalizada'),
-                          _LegendPill(color: const Color(0xFFF59E0B), label: 'Pendiente'),
+                          _LegendPill(color: const Color(0xFF3B82F6), label: AppStrings.activeLabel(locale)),
+                          _LegendPill(color: const Color(0xFF10B981), label: AppStrings.finishedLabel(locale)),
+                          _LegendPill(color: const Color(0xFFF59E0B), label: AppStrings.pendingLabel(locale)),
                         ],
                       ),
                       const SizedBox(height: 18),
-                      Text('Paso actual', style: Theme.of(context).textTheme.titleMedium),
+                      Text(AppStrings.currentStep(locale), style: Theme.of(context).textTheme.titleMedium),
                       const SizedBox(height: 6),
                       Text(
-                        tracking.currentTaskName?.trim().isNotEmpty == true ? tracking.currentTaskName! : 'Sin paso actual',
+                        tracking.currentTaskName?.trim().isNotEmpty == true ? tracking.currentTaskName! : AppStrings.noCurrentStep(locale),
                         style: Theme.of(context).textTheme.bodyLarge?.copyWith(fontWeight: FontWeight.w700),
                       ),
                       const SizedBox(height: 6),
                       Text(
-                        tracking.currentAreaName?.trim().isNotEmpty == true ? tracking.currentAreaName! : 'Area no definida',
+                        tracking.currentAreaName?.trim().isNotEmpty == true ? tracking.currentAreaName! : AppStrings.areaNotDefined(locale),
                         style: Theme.of(context).textTheme.bodyMedium,
                       ),
                     ],
@@ -149,19 +155,19 @@ class ClientTrackingScreen extends ConsumerWidget {
                   child: Column(
                     crossAxisAlignment: CrossAxisAlignment.start,
                     children: [
-                      Text('Tus envios', style: Theme.of(context).textTheme.titleLarge),
+                      Text(AppStrings.yourSubmissions(locale), style: Theme.of(context).textTheme.titleLarge),
                       const SizedBox(height: 10),
                       if (tracking.history.isEmpty)
-                        const EmptyStateView(
+                        EmptyStateView(
                           icon: Icons.inbox_outlined,
-                          title: 'Sin envios aun',
-                          subtitle: 'Cuando completes una tarea, aqui apareceran tus datos.',
+                          title: AppStrings.noSubmissions(locale),
+                          subtitle: AppStrings.yourSubmissions(locale),
                         )
                       else
                         ...tracking.history.map(
                           (entry) => Padding(
                             padding: const EdgeInsets.only(bottom: 12),
-                            child: _HistoryEntryCard(entry: entry),
+                            child: _HistoryEntryCard(entry: entry, localeCode: locale),
                           ),
                         ),
                     ],
@@ -175,9 +181,9 @@ class ClientTrackingScreen extends ConsumerWidget {
     );
   }
 
-  String _formatDate(String? value) {
+  String _formatDate(String? value, String localeCode) {
     if (value == null || value.trim().isEmpty) {
-      return 'Sin fecha';
+      return AppStrings.noDate(localeCode);
     }
 
     final parsed = DateTime.tryParse(value);
@@ -227,9 +233,10 @@ class _LegendPill extends StatelessWidget {
 }
 
 class _ProgressBar extends StatelessWidget {
-  const _ProgressBar({required this.value});
+  const _ProgressBar({required this.value, required this.localeCode});
 
   final int value;
+  final String localeCode;
 
   @override
   Widget build(BuildContext context) {
@@ -242,16 +249,17 @@ class _ProgressBar extends StatelessWidget {
           child: LinearProgressIndicator(value: progress, minHeight: 12),
         ),
         const SizedBox(height: 8),
-        Text('${value.clamp(0, 100)}% completado', style: Theme.of(context).textTheme.bodyMedium),
+        Text('${value.clamp(0, 100)}${AppStrings.progressCompleted(localeCode)}', style: Theme.of(context).textTheme.bodyMedium),
       ],
     );
   }
 }
 
 class _HistoryEntryCard extends StatelessWidget {
-  const _HistoryEntryCard({required this.entry});
+  const _HistoryEntryCard({required this.entry, required this.localeCode});
 
   final ClientTrackingHistoryItem entry;
+  final String localeCode;
 
   @override
   Widget build(BuildContext context) {
@@ -265,17 +273,17 @@ class _HistoryEntryCard extends StatelessWidget {
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
-          Text(entry.taskName?.trim().isNotEmpty == true ? entry.taskName! : 'Tarea', style: const TextStyle(fontWeight: FontWeight.w700)),
+          Text(entry.taskName?.trim().isNotEmpty == true ? entry.taskName! : AppStrings.task(localeCode), style: const TextStyle(fontWeight: FontWeight.w700)),
           const SizedBox(height: 4),
-          Text(entry.areaName?.trim().isNotEmpty == true ? entry.areaName! : 'Area no indicada', style: Theme.of(context).textTheme.bodySmall),
+          Text(entry.areaName?.trim().isNotEmpty == true ? entry.areaName! : AppStrings.areaNotIndicated(localeCode), style: Theme.of(context).textTheme.bodySmall),
           const SizedBox(height: 4),
-          Text(entry.completedAt?.trim().isNotEmpty == true ? entry.completedAt! : 'Sin fecha', style: Theme.of(context).textTheme.bodySmall),
+          Text(entry.completedAt?.trim().isNotEmpty == true ? entry.completedAt! : AppStrings.noDate(localeCode), style: Theme.of(context).textTheme.bodySmall),
           if (entry.formData != null && entry.formData!.isNotEmpty) ...[
             const SizedBox(height: 12),
             Wrap(
               spacing: 8,
               runSpacing: 8,
-              children: entry.formData!.entries.map((item) => _FieldChip(entry: item)).toList(),
+              children: entry.formData!.entries.map((item) => _FieldChip(entry: item, localeCode: localeCode)).toList(),
             ),
           ],
         ],
@@ -285,9 +293,10 @@ class _HistoryEntryCard extends StatelessWidget {
 }
 
 class _FieldChip extends StatelessWidget {
-  const _FieldChip({required this.entry});
+  const _FieldChip({required this.entry, required this.localeCode});
 
   final MapEntry<String, dynamic> entry;
+  final String localeCode;
 
   @override
   Widget build(BuildContext context) {
@@ -312,7 +321,7 @@ class _FieldChip extends StatelessWidget {
 
   String _displayValue(dynamic value) {
     if (value == null) {
-      return 'Sin dato';
+      return AppStrings.noData(localeCode);
     }
 
     if (value is Map<String, dynamic>) {

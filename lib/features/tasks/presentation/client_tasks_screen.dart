@@ -5,8 +5,10 @@ import 'package:file_picker/file_picker.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
+import '../../../core/i18n/app_strings.dart';
 import '../../../core/models/client_task_models.dart';
 import '../../../core/models/form_models.dart';
+import '../../../core/storage/app_preferences.dart';
 import '../../../core/widgets/app_widgets.dart';
 import '../../../core/widgets/dynamic_form_field_tile.dart';
 import '../../home/presentation/navigation_controller.dart';
@@ -21,6 +23,8 @@ class ClientTasksScreen extends ConsumerWidget {
 
   @override
   Widget build(BuildContext context, WidgetRef ref) {
+    final prefs = ref.watch(appPreferencesProvider);
+    final locale = prefs.localeCode;
     final tasksAsync = ref.watch(clientTasksProvider);
 
     return RefreshIndicator(
@@ -37,7 +41,7 @@ class ClientTasksScreen extends ConsumerWidget {
               crossAxisAlignment: CrossAxisAlignment.start,
               children: [
                 Text(
-                  'Tareas pendientes',
+                  AppStrings.tasksTitle(locale),
                   style: Theme.of(context).textTheme.labelLarge?.copyWith(
                         color: const Color(0xFF67E8F9),
                         letterSpacing: 2.5,
@@ -45,7 +49,7 @@ class ClientTasksScreen extends ConsumerWidget {
                 ),
                 const SizedBox(height: 8),
                 Text(
-                  'Accion requerida. Aqui veras lo que esta pendiente de tu parte para avanzar tus tramites.',
+                  AppStrings.tasksSubtitle(locale),
                   style: Theme.of(context).textTheme.bodyMedium,
                 ),
               ],
@@ -53,25 +57,25 @@ class ClientTasksScreen extends ConsumerWidget {
           ),
           const SizedBox(height: 18),
           tasksAsync.when(
-            loading: () => const SizedBox(height: 260, child: LoadingView(label: 'Cargando tareas pendientes...')),
+            loading: () => SizedBox(height: 260, child: LoadingView(label: AppStrings.loadingTasks(locale))),
             error: (error, _) => AppCard(
               child: EmptyStateView(
                 icon: Icons.error_outline_rounded,
-                title: 'No pudimos cargar tus tareas',
+                title: AppStrings.noTasks(locale),
                 subtitle: error.toString(),
                 action: FilledButton(
                   onPressed: () => ref.invalidate(clientTasksProvider),
-                  child: const Text('Reintentar'),
+                  child: Text(AppStrings.retry(locale)),
                 ),
               ),
             ),
             data: (items) {
               if (items.isEmpty) {
-                return const AppCard(
+                return AppCard(
                   child: EmptyStateView(
                     icon: Icons.inbox_outlined,
-                    title: 'No tienes tareas pendientes',
-                    subtitle: 'Cuando exista una accion requerida para ti, aparecera aqui automaticamente.',
+                    title: AppStrings.noTasksAvailable(locale),
+                    subtitle: AppStrings.tasksSubtitle(locale),
                   ),
                 );
               }
@@ -98,7 +102,7 @@ class ClientTasksScreen extends ConsumerWidget {
                               style: Theme.of(context).textTheme.titleLarge?.copyWith(fontWeight: FontWeight.w700),
                             ),
                             const SizedBox(height: 8),
-                            Text(item.areaName?.trim().isNotEmpty == true ? item.areaName! : 'Pendiente de tu parte'),
+                            Text(item.areaName?.trim().isNotEmpty == true ? item.areaName! : AppStrings.pendingForYou(locale)),
                             const SizedBox(height: 16),
                             Align(
                               alignment: Alignment.centerRight,
@@ -106,11 +110,11 @@ class ClientTasksScreen extends ConsumerWidget {
                                 onPressed: () {
                                   Navigator.of(context).push(
                                     MaterialPageRoute(
-                                      builder: (_) => ClientTaskFormScreen(taskId: item.taskId),
+                                      builder: (_) => ClientTaskFormScreen(taskId: item.taskId, localeCode: locale),
                                     ),
                                   );
                                 },
-                                child: const Text('Completar'),
+                                child: Text(AppStrings.complete(locale)),
                               ),
                             ),
                           ],
@@ -128,9 +132,10 @@ class ClientTasksScreen extends ConsumerWidget {
 }
 
 class ClientTaskFormScreen extends ConsumerStatefulWidget {
-  const ClientTaskFormScreen({super.key, required this.taskId});
+  const ClientTaskFormScreen({super.key, required this.taskId, required this.localeCode});
 
   final String taskId;
+  final String localeCode;
 
   @override
   ConsumerState<ClientTaskFormScreen> createState() => _ClientTaskFormScreenState();
@@ -259,7 +264,7 @@ class _ClientTaskFormScreenState extends ConsumerState<ClientTaskFormScreen> {
     }
 
     if (!_isFormValid()) {
-      setState(() => _submitError = 'Completa los campos obligatorios antes de continuar.');
+      setState(() => _submitError = AppStrings.fillRequired(widget.localeCode));
       return;
     }
 
@@ -277,7 +282,7 @@ class _ClientTaskFormScreenState extends ConsumerState<ClientTaskFormScreen> {
       }
 
       ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(content: Text(response.message.isNotEmpty ? response.message : 'Tarea completada exitosamente.')),
+        SnackBar(content: Text(response.message.isNotEmpty ? response.message : AppStrings.complete(widget.localeCode))),
       );
       ref.read(navigationControllerProvider).setIndex(2);
       if (Navigator.of(context).canPop()) {
@@ -344,8 +349,8 @@ class _ClientTaskFormScreenState extends ConsumerState<ClientTaskFormScreen> {
   @override
   Widget build(BuildContext context) {
     return Scaffold(
-      appBar: AppBar(title: Text(_form?.taskName ?? 'Completar tarea')),
-      body: _loading ? const LoadingView(label: 'Cargando formulario...') : _body(context),
+      appBar: AppBar(title: Text(_form?.taskName ?? AppStrings.complete(widget.localeCode))),
+      body: _loading ? LoadingView(label: AppStrings.loadingInitialForm(widget.localeCode)) : _body(context),
     );
   }
 
@@ -355,14 +360,14 @@ class _ClientTaskFormScreenState extends ConsumerState<ClientTaskFormScreen> {
         child: Padding(
           padding: const EdgeInsets.all(24),
           child: AppCard(
-            child: EmptyStateView(
-              icon: Icons.error_outline_rounded,
-              title: 'No pudimos abrir la tarea',
-              subtitle: _errorMessage!,
-              action: FilledButton(
-                onPressed: _loadForm,
-                child: const Text('Reintentar'),
-              ),
+              child: EmptyStateView(
+                icon: Icons.error_outline_rounded,
+                title: AppStrings.noTasks(widget.localeCode),
+                subtitle: _errorMessage!,
+                action: FilledButton(
+                  onPressed: _loadForm,
+                  child: Text(AppStrings.retry(widget.localeCode)),
+                ),
             ),
           ),
         ),
@@ -398,7 +403,7 @@ class _ClientTaskFormScreenState extends ConsumerState<ClientTaskFormScreen> {
                   ),
                   const SizedBox(height: 10),
                   Text(
-                    form.areaName?.trim().isNotEmpty == true ? form.areaName! : 'Accion requerida',
+                    form.areaName?.trim().isNotEmpty == true ? form.areaName! : AppStrings.actionRequired(widget.localeCode),
                     style: Theme.of(context).textTheme.bodyMedium,
                   ),
                 ],
@@ -417,11 +422,11 @@ class _ClientTaskFormScreenState extends ConsumerState<ClientTaskFormScreen> {
                 const SizedBox(height: 12),
               ]
             else
-              const AppCard(
+              AppCard(
                 child: EmptyStateView(
                   icon: Icons.playlist_add_check_rounded,
-                  title: 'Sin formulario definido',
-                  subtitle: 'Puedes completar la tarea sin campos adicionales.',
+                  title: AppStrings.noFormDefined(widget.localeCode),
+                  subtitle: AppStrings.completeWithoutFields(widget.localeCode),
                 ),
               ),
             if (_submitError != null) ...[
@@ -441,7 +446,7 @@ class _ClientTaskFormScreenState extends ConsumerState<ClientTaskFormScreen> {
           right: 20,
           bottom: 20,
           child: AppPrimaryButton(
-            label: _submitting ? 'Enviando...' : 'Completar tarea',
+            label: _submitting ? AppStrings.sending(widget.localeCode) : AppStrings.complete(widget.localeCode),
             isLoading: _submitting,
             onPressed: _submit,
           ),

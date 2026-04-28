@@ -5,9 +5,11 @@ import 'package:file_picker/file_picker.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
+import '../../../core/i18n/app_strings.dart';
 import '../../../core/models/form_models.dart';
 import '../../../core/models/process_models.dart';
 import '../../../core/network/file_upload_repository.dart';
+import '../../../core/storage/app_preferences.dart';
 import '../../../core/widgets/app_widgets.dart';
 import '../../../core/widgets/dynamic_form_field_tile.dart';
 import '../../home/presentation/navigation_controller.dart';
@@ -140,12 +142,14 @@ class _StartProcessScreenState extends ConsumerState<StartProcessScreen> {
   }
 
   Future<void> _submit() async {
+    final locale = ref.read(appPreferencesProvider).localeCode;
+
     if (_submitting) {
       return;
     }
 
     if (!_isFormValid()) {
-      setState(() => _submitError = 'Completa los campos obligatorios antes de continuar.');
+      setState(() => _submitError = AppStrings.fillRequired(locale));
       return;
     }
 
@@ -166,7 +170,7 @@ class _StartProcessScreenState extends ConsumerState<StartProcessScreen> {
       }
 
       ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(content: Text(result.message.isNotEmpty ? result.message : 'Tramite iniciado exitosamente.')),
+        SnackBar(content: Text(result.message.isNotEmpty ? result.message : AppStrings.startedSuccessfully(locale))),
       );
       ref.read(navigationControllerProvider).setIndex(2);
       if (Navigator.of(context).canPop()) {
@@ -229,17 +233,19 @@ class _StartProcessScreenState extends ConsumerState<StartProcessScreen> {
 
   @override
   Widget build(BuildContext context) {
+    final prefs = ref.watch(appPreferencesProvider);
+    final locale = prefs.localeCode;
     return Scaffold(
       appBar: AppBar(
         title: Text(widget.process.nombre),
       ),
       body: _loading
-          ? const LoadingView(label: 'Cargando formulario inicial...')
-          : _errorView(context),
+          ? LoadingView(label: AppStrings.loadingInitialForm(locale))
+          : _errorView(context, locale),
     );
   }
 
-  Widget _errorView(BuildContext context) {
+  Widget _errorView(BuildContext context, String locale) {
     if (_errorMessage != null) {
       return Center(
         child: Padding(
@@ -247,11 +253,11 @@ class _StartProcessScreenState extends ConsumerState<StartProcessScreen> {
           child: AppCard(
             child: EmptyStateView(
               icon: Icons.error_outline_rounded,
-              title: 'No pudimos abrir el tramite',
+              title: AppStrings.noProcesses(locale),
               subtitle: _errorMessage!,
               action: FilledButton(
                 onPressed: _loadPreview,
-                child: const Text('Reintentar'),
+                child: Text(AppStrings.retry(locale)),
               ),
             ),
           ),
@@ -275,7 +281,7 @@ class _StartProcessScreenState extends ConsumerState<StartProcessScreen> {
                 crossAxisAlignment: CrossAxisAlignment.start,
                 children: [
                   Text(
-                    'Nuevo tramite',
+                    AppStrings.quickNewProcess(locale),
                     style: Theme.of(context).textTheme.labelLarge?.copyWith(
                           color: const Color(0xFF67E8F9),
                           letterSpacing: 2.5,
@@ -290,7 +296,7 @@ class _StartProcessScreenState extends ConsumerState<StartProcessScreen> {
                   ),
                   const SizedBox(height: 10),
                   Text(
-                    'Completa este primer formulario para iniciar y procesar tu tramite.',
+                    AppStrings.processesDescription(locale),
                     style: Theme.of(context).textTheme.bodyMedium,
                   ),
                 ],
@@ -309,10 +315,10 @@ class _StartProcessScreenState extends ConsumerState<StartProcessScreen> {
                 const SizedBox(height: 12),
               ],
             ] else
-              const AppCard(
+              AppCard(
                 child: EmptyStateView(
-                  title: 'Sin formulario adicional',
-                  subtitle: 'El tramite se puede iniciar directamente.',
+                  title: AppStrings.noAdditionalForm(locale),
+                  subtitle: AppStrings.completeWithoutFields(locale),
                   icon: Icons.playlist_add_check_rounded,
                 ),
               ),
@@ -333,7 +339,7 @@ class _StartProcessScreenState extends ConsumerState<StartProcessScreen> {
           right: 20,
           bottom: 20,
           child: AppPrimaryButton(
-            label: _submitting ? 'Iniciando...' : 'Iniciar tramite',
+            label: _submitting ? AppStrings.starting(locale) : AppStrings.startProcess(locale),
             isLoading: _submitting,
             onPressed: _submit,
           ),

@@ -1,6 +1,8 @@
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
+import '../../../core/i18n/app_strings.dart';
+import '../../../core/storage/app_preferences.dart';
 import '../../../core/widgets/app_widgets.dart';
 import '../../tracking/presentation/client_tracking_screen.dart';
 import '../data/client_instances_repository.dart';
@@ -14,6 +16,8 @@ class ClientInstancesScreen extends ConsumerWidget {
 
   @override
   Widget build(BuildContext context, WidgetRef ref) {
+    final prefs = ref.watch(appPreferencesProvider);
+    final locale = prefs.localeCode;
     final instancesAsync = ref.watch(clientInstancesProvider);
 
     return RefreshIndicator(
@@ -30,7 +34,7 @@ class ClientInstancesScreen extends ConsumerWidget {
               crossAxisAlignment: CrossAxisAlignment.start,
               children: [
                 Text(
-                  'Mis tramites',
+                  AppStrings.instancesTitle(locale),
                   style: Theme.of(context).textTheme.labelLarge?.copyWith(
                         color: const Color(0xFF67E8F9),
                         letterSpacing: 2.5,
@@ -38,7 +42,7 @@ class ClientInstancesScreen extends ConsumerWidget {
                 ),
                 const SizedBox(height: 8),
                 Text(
-                  'Aqui puedes ver las instancias que iniciaste y abrir su seguimiento.',
+                  AppStrings.instancesSubtitle(locale),
                   style: Theme.of(context).textTheme.bodyMedium,
                 ),
               ],
@@ -46,25 +50,25 @@ class ClientInstancesScreen extends ConsumerWidget {
           ),
           const SizedBox(height: 18),
           instancesAsync.when(
-            loading: () => const SizedBox(height: 260, child: LoadingView(label: 'Cargando tus tramites...')),
+            loading: () => SizedBox(height: 260, child: LoadingView(label: AppStrings.loadingInstances(locale))),
             error: (error, _) => AppCard(
               child: EmptyStateView(
                 icon: Icons.error_outline_rounded,
-                title: 'No pudimos cargar tus tramites',
+                title: AppStrings.noInstances(locale),
                 subtitle: error.toString(),
                 action: FilledButton(
                   onPressed: () => ref.invalidate(clientInstancesProvider),
-                  child: const Text('Reintentar'),
+                  child: Text(AppStrings.retry(locale)),
                 ),
               ),
             ),
             data: (items) {
               if (items.isEmpty) {
-                return const AppCard(
+                return AppCard(
                   child: EmptyStateView(
                     icon: Icons.inbox_outlined,
-                    title: 'Todavia no tienes tramites',
-                    subtitle: 'Cuando inicies uno nuevo aparecera aqui.',
+                    title: AppStrings.noInstancesAvailable(locale),
+                    subtitle: AppStrings.instancesSubtitle(locale),
                   ),
                 );
               }
@@ -99,16 +103,16 @@ class ClientInstancesScreen extends ConsumerWidget {
                                     ],
                                   ),
                                 ),
-                                _StatePill(label: item.estado),
+                                _StatePill(label: item.estado, localeCode: locale),
                               ],
                             ),
                             const SizedBox(height: 12),
-                            Text('Version: v${item.processVersion}', style: Theme.of(context).textTheme.bodyMedium),
+                            Text('${AppStrings.versionLabel(locale)}: v${item.processVersion}', style: Theme.of(context).textTheme.bodyMedium),
                             const SizedBox(height: 6),
-                            Text('Inicio: ${_formatDate(item.startedAt)}', style: Theme.of(context).textTheme.bodyMedium),
+                            Text('${AppStrings.startLabel(locale)}: ${_formatDate(item.startedAt, locale)}', style: Theme.of(context).textTheme.bodyMedium),
                             if ((item.finishedAt ?? '').trim().isNotEmpty) ...[
                               const SizedBox(height: 6),
-                              Text('Fin: ${_formatDate(item.finishedAt)}', style: Theme.of(context).textTheme.bodyMedium),
+                              Text('${AppStrings.endLabel(locale)}: ${_formatDate(item.finishedAt, locale)}', style: Theme.of(context).textTheme.bodyMedium),
                             ],
                             const SizedBox(height: 18),
                             Align(
@@ -121,7 +125,7 @@ class ClientInstancesScreen extends ConsumerWidget {
                                     ),
                                   );
                                 },
-                                child: const Text('Ver seguimiento'),
+                                child: Text(AppStrings.viewTracking(locale)),
                               ),
                             ),
                           ],
@@ -137,9 +141,9 @@ class ClientInstancesScreen extends ConsumerWidget {
     );
   }
 
-  String _formatDate(String? value) {
+  String _formatDate(String? value, String localeCode) {
     if (value == null || value.trim().isEmpty) {
-      return 'Sin fecha';
+      return AppStrings.noDate(localeCode);
     }
 
     final parsed = DateTime.tryParse(value);
@@ -152,9 +156,10 @@ class ClientInstancesScreen extends ConsumerWidget {
 }
 
 class _StatePill extends StatelessWidget {
-  const _StatePill({required this.label});
+  const _StatePill({required this.label, required this.localeCode});
 
   final String label;
+  final String localeCode;
 
   @override
   Widget build(BuildContext context) {
@@ -164,7 +169,7 @@ class _StatePill extends StatelessWidget {
         color: const Color(0xFF113344),
         borderRadius: BorderRadius.circular(999),
       ),
-      child: Text(label.trim().isNotEmpty ? label : 'ACTIVA'),
+      child: Text(label.trim().isNotEmpty ? label : AppStrings.activeLabel(localeCode)),
     );
   }
 }

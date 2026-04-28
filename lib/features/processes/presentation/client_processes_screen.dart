@@ -1,6 +1,8 @@
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
+import '../../../core/i18n/app_strings.dart';
+import '../../../core/storage/app_preferences.dart';
 import '../../../core/widgets/app_widgets.dart';
 import '../../home/presentation/navigation_controller.dart';
 import '../data/client_process_repository.dart';
@@ -15,6 +17,8 @@ class ClientProcessesScreen extends ConsumerWidget {
 
   @override
   Widget build(BuildContext context, WidgetRef ref) {
+    final prefs = ref.watch(appPreferencesProvider);
+    final locale = prefs.localeCode;
     final processesAsync = ref.watch(clientProcessesProvider);
 
     return RefreshIndicator(
@@ -31,7 +35,7 @@ class ClientProcessesScreen extends ConsumerWidget {
               crossAxisAlignment: CrossAxisAlignment.start,
               children: [
                 Text(
-                  'Nuevos tramites',
+                  AppStrings.processesTitle(locale),
                   style: Theme.of(context).textTheme.labelLarge?.copyWith(
                         color: const Color(0xFF67E8F9),
                         letterSpacing: 2.5,
@@ -39,12 +43,12 @@ class ClientProcessesScreen extends ConsumerWidget {
                 ),
                 const SizedBox(height: 8),
                 Text(
-                  'Procesos disponibles para iniciar',
+                  AppStrings.processesSubtitle(locale),
                   style: Theme.of(context).textTheme.headlineMedium?.copyWith(fontSize: 28),
                 ),
                 const SizedBox(height: 10),
                 Text(
-                  'Selecciona el tramite que quieres comenzar y completa su primer formulario.',
+                  AppStrings.processesDescription(locale),
                   style: Theme.of(context).textTheme.bodyMedium,
                 ),
               ],
@@ -52,25 +56,25 @@ class ClientProcessesScreen extends ConsumerWidget {
           ),
           const SizedBox(height: 18),
           processesAsync.when(
-            loading: () => const SizedBox(height: 260, child: LoadingView(label: 'Cargando tramites disponibles...')),
+            loading: () => SizedBox(height: 260, child: LoadingView(label: AppStrings.loadingProcesses(locale))),
             error: (error, _) => AppCard(
               child: EmptyStateView(
                 icon: Icons.error_outline_rounded,
-                title: 'No pudimos cargar los tramites',
+                title: AppStrings.noProcesses(locale),
                 subtitle: error.toString(),
                 action: FilledButton(
                   onPressed: () => ref.invalidate(clientProcessesProvider),
-                  child: const Text('Reintentar'),
+                  child: Text(AppStrings.retry(locale)),
                 ),
               ),
             ),
             data: (items) {
               if (items.isEmpty) {
-                return const AppCard(
+                return AppCard(
                   child: EmptyStateView(
                     icon: Icons.inbox_outlined,
-                    title: 'No hay tramites disponibles',
-                    subtitle: 'Cuando el sistema publique uno nuevo, aparecera aqui.',
+                    title: AppStrings.noProcessesAvailable(locale),
+                    subtitle: AppStrings.processesDescription(locale),
                   ),
                 );
               }
@@ -112,7 +116,7 @@ class ClientProcessesScreen extends ConsumerWidget {
                             Text(
                               item.descripcion?.trim().isNotEmpty == true
                                   ? item.descripcion!.trim()
-                                  : 'Sin descripcion disponible.',
+                                  : AppStrings.noDescription(locale),
                               style: Theme.of(context).textTheme.bodyMedium,
                             ),
                             const SizedBox(height: 18),
@@ -120,7 +124,7 @@ class ClientProcessesScreen extends ConsumerWidget {
                               children: [
                                 Expanded(
                                   child: Text(
-                                    'Accion requerida: inicia y completa tu primer formulario.',
+                                    AppStrings.actionRequired(locale),
                                     style: Theme.of(context).textTheme.bodySmall,
                                   ),
                                 ),
@@ -133,7 +137,7 @@ class ClientProcessesScreen extends ConsumerWidget {
                                       ),
                                     );
                                   },
-                                  child: const Text('Iniciar tramite'),
+                                  child: Text(AppStrings.startProcess(locale)),
                                 ),
                               ],
                             ),

@@ -75,4 +75,79 @@ class AppTheme {
       ),
     );
   }
+
+  static ThemeData light() {
+    const seed = Color(0xFF2563EB);
+    final colorScheme = ColorScheme.fromSeed(
+      seedColor: seed,
+      brightness: Brightness.light,
+      primary: seed,
+      secondary: const Color(0xFF0EA5E9),
+      surface: const Color(0xFFF8FAFC),
+      background: const Color(0xFFF1F5F9),
+    );
+
+    return ThemeData(
+      useMaterial3: true,
+      colorScheme: colorScheme,
+      scaffoldBackgroundColor: const Color(0xFFF1F5F9),
+      appBarTheme: const AppBarTheme(
+        backgroundColor: Color(0xFFF1F5F9),
+        foregroundColor: Color(0xFF0F172A),
+        centerTitle: false,
+        elevation: 0,
+      ),
+      cardTheme: CardThemeData(
+        color: Colors.white,
+        elevation: 0,
+        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(24)),
+      ),
+      inputDecorationTheme: InputDecorationTheme(
+        filled: true,
+        fillColor: Colors.white,
+        border: OutlineInputBorder(
+          borderRadius: BorderRadius.circular(18),
+          borderSide: BorderSide(color: Colors.black.withOpacity(0.08)),
+        ),
+        enabledBorder: OutlineInputBorder(
+          borderRadius: BorderRadius.circular(18),
+          borderSide: BorderSide(color: Colors.black.withOpacity(0.08)),
+        ),
+        focusedBorder: OutlineInputBorder(
+          borderRadius: BorderRadius.circular(18),
+          borderSide: const BorderSide(color: seed, width: 1.5),
+        ),
+        labelStyle: const TextStyle(color: Color(0xFF475569)),
+        hintStyle: const TextStyle(color: Color(0xFF94A3B8)),
+      ),
+      textTheme: const TextTheme(
+        displayLarge: TextStyle(color: Color(0xFF0F172A), fontWeight: FontWeight.w700),
+        displayMedium: TextStyle(color: Color(0xFF0F172A), fontWeight: FontWeight.w700),
+        headlineMedium: TextStyle(color: Color(0xFF0F172A), fontWeight: FontWeight.w700),
+        titleLarge: TextStyle(color: Color(0xFF0F172A), fontWeight: FontWeight.w700),
+        titleMedium: TextStyle(color: Color(0xFF0F172A)),
+        bodyLarge: TextStyle(color: Color(0xFF0F172A)),
+        bodyMedium: TextStyle(color: Color(0xFF334155)),
+        bodySmall: TextStyle(color: Color(0xFF64748B)),
+      ),
+      filledButtonTheme: FilledButtonThemeData(
+        style: FilledButton.styleFrom(
+          backgroundColor: seed,
+          foregroundColor: Colors.white,
+          textStyle: const TextStyle(fontWeight: FontWeight.w700),
+          padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 16),
+          shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(18)),
+        ),
+      ),
+      outlinedButtonTheme: OutlinedButtonThemeData(
+        style: OutlinedButton.styleFrom(
+          foregroundColor: const Color(0xFF0F172A),
+          side: BorderSide(color: Colors.black.withOpacity(0.12)),
+          textStyle: const TextStyle(fontWeight: FontWeight.w700),
+          padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 16),
+          shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(18)),
+        ),
+      ),
+    );
+  }
 }

@@ -1,7 +1,9 @@
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
+import 'package:flutter_localizations/flutter_localizations.dart';
 
 import '../core/widgets/app_widgets.dart';
+import '../core/storage/app_preferences.dart';
 import '../features/auth/presentation/auth_controller.dart';
 import '../features/auth/presentation/login_screen.dart';
 import '../features/home/presentation/client_shell.dart';
@@ -13,11 +15,21 @@ class SystemMovileApp extends ConsumerWidget {
   @override
   Widget build(BuildContext context, WidgetRef ref) {
     final authState = ref.watch(authControllerProvider).state;
+    final prefs = ref.watch(appPreferencesProvider);
 
     return MaterialApp(
       debugShowCheckedModeBanner: false,
       title: 'Sistema Clientes',
-      theme: AppTheme.dark(),
+      theme: AppTheme.light(),
+      darkTheme: AppTheme.dark(),
+      themeMode: prefs.themeMode,
+      locale: Locale(prefs.localeCode),
+      supportedLocales: const [Locale('es'), Locale('en')],
+      localizationsDelegates: const [
+        GlobalMaterialLocalizations.delegate,
+        GlobalWidgetsLocalizations.delegate,
+        GlobalCupertinoLocalizations.delegate,
+      ],
       home: _AuthGate(authState: authState),
     );
   }
@@ -38,6 +50,7 @@ class _AuthGateState extends ConsumerState<_AuthGate> {
     super.initState();
     WidgetsBinding.instance.addPostFrameCallback((_) {
       ref.read(authControllerProvider.notifier).bootstrap();
+      ref.read(appPreferencesProvider).bootstrap();
     });
   }
 

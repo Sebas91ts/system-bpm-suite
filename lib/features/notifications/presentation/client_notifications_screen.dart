@@ -1,7 +1,9 @@
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
+import '../../../core/i18n/app_strings.dart';
 import '../../../core/models/notification_models.dart';
+import '../../../core/storage/app_preferences.dart';
 import '../../../core/widgets/app_widgets.dart';
 import '../data/client_notifications_repository.dart';
 
@@ -14,6 +16,8 @@ class ClientNotificationsScreen extends ConsumerWidget {
 
   @override
   Widget build(BuildContext context, WidgetRef ref) {
+    final prefs = ref.watch(appPreferencesProvider);
+    final locale = prefs.localeCode;
     final notificationsAsync = ref.watch(clientNotificationsProvider);
 
     return RefreshIndicator(
@@ -36,7 +40,7 @@ class ClientNotificationsScreen extends ConsumerWidget {
                         crossAxisAlignment: CrossAxisAlignment.start,
                         children: [
                           Text(
-                            'Notificaciones',
+                            AppStrings.notificationsTitle(locale),
                             style: Theme.of(context).textTheme.labelLarge?.copyWith(
                                   color: const Color(0xFF67E8F9),
                                   letterSpacing: 2.5,
@@ -44,7 +48,7 @@ class ClientNotificationsScreen extends ConsumerWidget {
                           ),
                           const SizedBox(height: 8),
                           Text(
-                            'Aqui veras avisos sobre tus tramites, cambios de estado y mensajes del sistema.',
+                            AppStrings.notificationsSubtitle(locale),
                             style: Theme.of(context).textTheme.bodyMedium,
                           ),
                         ],
@@ -56,7 +60,7 @@ class ClientNotificationsScreen extends ConsumerWidget {
                         await ref.read(clientNotificationsRepositoryProvider).markAllAsRead();
                         ref.invalidate(clientNotificationsProvider);
                       },
-                      child: const Text('Marcar todas'),
+                      child: Text(AppStrings.markAllRead(locale)),
                     ),
                   ],
                 ),
@@ -65,25 +69,25 @@ class ClientNotificationsScreen extends ConsumerWidget {
           ),
           const SizedBox(height: 18),
           notificationsAsync.when(
-            loading: () => const SizedBox(height: 260, child: LoadingView(label: 'Cargando notificaciones...')),
+            loading: () => SizedBox(height: 260, child: LoadingView(label: AppStrings.loadingNotifications(locale))),
             error: (error, _) => AppCard(
               child: EmptyStateView(
                 icon: Icons.error_outline_rounded,
-                title: 'No pudimos cargar las notificaciones',
+                title: AppStrings.noNotifications(locale),
                 subtitle: error.toString(),
                 action: FilledButton(
                   onPressed: () => ref.invalidate(clientNotificationsProvider),
-                  child: const Text('Reintentar'),
+                  child: Text(AppStrings.retry(locale)),
                 ),
               ),
             ),
             data: (items) {
               if (items.isEmpty) {
-                return const AppCard(
+                return AppCard(
                   child: EmptyStateView(
                     icon: Icons.notifications_off_rounded,
-                    title: 'Sin notificaciones',
-                    subtitle: 'Cuando exista una novedad, la veras aqui.',
+                    title: AppStrings.noNotificationsAvailable(locale),
+                    subtitle: AppStrings.notificationsSubtitle(locale),
                   ),
                 );
               }
@@ -112,22 +116,22 @@ class ClientNotificationsScreen extends ConsumerWidget {
                                     ],
                                   ),
                                 ),
-                                _ReadChip(read: item.read),
+                                _ReadChip(read: item.read, localeCode: locale),
                               ],
                             ),
                             const SizedBox(height: 10),
-                            Text(item.createdAt != null ? _formatDate(item.createdAt) : 'Sin fecha', style: Theme.of(context).textTheme.bodySmall),
+                            Text(item.createdAt != null ? _formatDate(item.createdAt, locale) : AppStrings.noDate(locale), style: Theme.of(context).textTheme.bodySmall),
                             const SizedBox(height: 16),
                             Align(
                               alignment: Alignment.centerRight,
-                              child: TextButton(
+                                child: TextButton(
                                 onPressed: item.read
                                     ? null
                                     : () async {
                                         await ref.read(clientNotificationsRepositoryProvider).markAsRead(item.id);
                                         ref.invalidate(clientNotificationsProvider);
                                       },
-                                child: const Text('Marcar como leida'),
+                                child: Text(AppStrings.markRead(locale)),
                               ),
                             ),
                           ],
@@ -143,9 +147,9 @@ class ClientNotificationsScreen extends ConsumerWidget {
     );
   }
 
-  String _formatDate(String? value) {
+  String _formatDate(String? value, String localeCode) {
     if (value == null || value.trim().isEmpty) {
-      return 'Sin fecha';
+      return AppStrings.noDate(localeCode);
     }
 
     final parsed = DateTime.tryParse(value);
@@ -158,9 +162,10 @@ class ClientNotificationsScreen extends ConsumerWidget {
 }
 
 class _ReadChip extends StatelessWidget {
-  const _ReadChip({required this.read});
+  const _ReadChip({required this.read, required this.localeCode});
 
   final bool read;
+  final String localeCode;
 
   @override
   Widget build(BuildContext context) {
@@ -170,7 +175,7 @@ class _ReadChip extends StatelessWidget {
         color: read ? const Color(0xFF0F5132) : const Color(0xFF3A2F0F),
         borderRadius: BorderRadius.circular(999),
       ),
-      child: Text(read ? 'Leida' : 'Pendiente'),
+      child: Text(read ? AppStrings.read(localeCode) : AppStrings.unread(localeCode)),
     );
   }
 }

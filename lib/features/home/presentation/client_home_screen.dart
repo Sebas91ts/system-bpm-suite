@@ -1,6 +1,8 @@
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
+import '../../../core/i18n/app_strings.dart';
+import '../../../core/storage/app_preferences.dart';
 import '../../../core/widgets/app_widgets.dart';
 import 'navigation_controller.dart';
 
@@ -9,34 +11,37 @@ class ClientHomeScreen extends ConsumerWidget {
 
   @override
   Widget build(BuildContext context, WidgetRef ref) {
+    final prefs = ref.watch(appPreferencesProvider);
+    final locale = prefs.localeCode;
+
     return ListView(
       padding: const EdgeInsets.all(20),
       children: [
         AppCard(
           padding: const EdgeInsets.all(22),
           child: Column(
-            crossAxisAlignment: CrossAxisAlignment.start,
-            children: [
-              Text(
-                'Bienvenido',
-                style: Theme.of(context).textTheme.labelLarge?.copyWith(
-                      color: const Color(0xFF67E8F9),
-                      letterSpacing: 2.5,
-                    ),
-              ),
-              const SizedBox(height: 8),
-              Text(
-                'Tu portal de tramites en el bolsillo',
-                style: Theme.of(context).textTheme.headlineMedium?.copyWith(fontSize: 28),
-              ),
-              const SizedBox(height: 10),
-              Text(
-                'Aqui puedes iniciar tramites, revisar tus instancias, completar tareas y ver tus notificaciones.',
-                style: Theme.of(context).textTheme.bodyMedium,
-              ),
-            ],
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Text(
+                  AppStrings.homeWelcome(locale),
+                  style: Theme.of(context).textTheme.labelLarge?.copyWith(
+                        color: const Color(0xFF67E8F9),
+                        letterSpacing: 2.5,
+                      ),
+                ),
+                const SizedBox(height: 8),
+                Text(
+                  AppStrings.homeSubtitle(locale),
+                  style: Theme.of(context).textTheme.headlineMedium?.copyWith(fontSize: 28),
+                ),
+                const SizedBox(height: 10),
+                Text(
+                  AppStrings.homeDescription(locale),
+                  style: Theme.of(context).textTheme.bodyMedium,
+                ),
+              ],
+            ),
           ),
-        ),
         const SizedBox(height: 18),
         GridView.count(
           crossAxisCount: MediaQuery.of(context).size.width > 420 ? 2 : 1,
@@ -48,26 +53,26 @@ class ClientHomeScreen extends ConsumerWidget {
           children: [
             _QuickCard(
               icon: Icons.add_circle_outline_rounded,
-              title: 'Nuevo tramite',
-              subtitle: 'Revisa los procesos disponibles para iniciar.',
+              title: AppStrings.quickNewProcess(locale),
+              subtitle: AppStrings.processesSubtitle(locale),
               onTap: () => ref.read(navigationControllerProvider).setIndex(1),
             ),
             _QuickCard(
               icon: Icons.list_alt_rounded,
-              title: 'Mis tramites',
-              subtitle: 'Abre seguimiento de tus instancias.',
+              title: AppStrings.quickMyProcesses(locale),
+              subtitle: AppStrings.instancesSubtitle(locale),
               onTap: () => ref.read(navigationControllerProvider).setIndex(2),
             ),
             _QuickCard(
               icon: Icons.task_alt_rounded,
-              title: 'Tareas pendientes',
-              subtitle: 'Completa lo que tienes pendiente.',
+              title: AppStrings.quickPendingTasks(locale),
+              subtitle: AppStrings.tasksSubtitle(locale),
               onTap: () => ref.read(navigationControllerProvider).setIndex(3),
             ),
             _QuickCard(
               icon: Icons.notifications_rounded,
-              title: 'Notificaciones',
-              subtitle: 'Ve avisos del sistema y respuestas.',
+              title: AppStrings.quickNotifications(locale),
+              subtitle: AppStrings.notificationsSubtitle(locale),
               onTap: () => ref.read(navigationControllerProvider).setIndex(4),
             ),
           ],
