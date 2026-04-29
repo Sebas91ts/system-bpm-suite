@@ -4,6 +4,7 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import '../../../core/i18n/app_strings.dart';
 import '../../../core/storage/app_preferences.dart';
 import '../../../core/widgets/app_widgets.dart';
+import 'register_screen.dart';
 import 'auth_controller.dart';
 
 class LoginScreen extends ConsumerStatefulWidget {
@@ -127,6 +128,19 @@ class _LoginScreenState extends ConsumerState<LoginScreen> {
                           },
                         ),
                         const SizedBox(height: 12),
+                        TextButton(
+                          onPressed: authState.loading
+                              ? null
+                              : () {
+                                  Navigator.of(context).push(
+                                    MaterialPageRoute(
+                                      builder: (_) => const RegisterScreen(),
+                                    ),
+                                  );
+                                },
+                          child: const Text('Crear cuenta'),
+                        ),
+                        const SizedBox(height: 6),
                         Text(
                           AppStrings.onlyClients(locale),
                           textAlign: TextAlign.center,

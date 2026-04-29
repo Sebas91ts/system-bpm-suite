@@ -35,6 +35,34 @@ class AuthRepository {
     return envelope.data;
   }
 
+  Future<AppUser> register({
+    required String nombre,
+    required String apellido,
+    required String email,
+    required String password,
+  }) async {
+    final response = await _dio.post<Map<String, dynamic>>(
+      '/auth/register',
+      data: {
+        'nombre': nombre,
+        'apellido': apellido,
+        'email': email,
+        'password': password,
+      },
+    );
+
+    final envelope = ApiResponse.fromJson(
+      Map<String, dynamic>.from(response.data ?? const {}),
+      (json) => AppUser.fromJson(Map<String, dynamic>.from(json as Map)),
+    );
+
+    if (!envelope.success) {
+      throw _messageException(envelope.message);
+    }
+
+    return envelope.data;
+  }
+
   Future<AppUser> me() async {
     final response = await _dio.get<Map<String, dynamic>>('/auth/me');
     final envelope = ApiResponse.fromJson(

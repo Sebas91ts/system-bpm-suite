@@ -17,8 +17,24 @@ class SessionStorage extends ChangeNotifier {
     final token = await _storage.read(key: _tokenKey);
     final userRaw = await _storage.read(key: _userKey);
 
-    if (token == null || token.isEmpty || userRaw == null || userRaw.isEmpty) {
+    if (token == null || token.isEmpty) {
       return null;
+    }
+
+    if (userRaw == null || userRaw.isEmpty) {
+      return AuthSession(
+        token: token,
+        tokenType: 'Bearer',
+        expiresIn: 0,
+        user: AppUser(
+          id: '',
+          nombre: '',
+          apellido: '',
+          email: '',
+          roles: const <String>[],
+          activo: false,
+        ),
+      );
     }
 
     try {
