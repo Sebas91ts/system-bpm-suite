@@ -30,9 +30,10 @@ class ClientProcessRepository {
 
   Future<ClientProcessStartPreview> startPreview(String processId) async {
     final response = await _dio.get<Map<String, dynamic>>('/client/processes/$processId/start-preview');
+    final body = Map<String, dynamic>.from(response.data ?? const {});
     final envelope = ApiResponse.fromJson(
-      Map<String, dynamic>.from(response.data ?? const {}),
-      (json) => ClientProcessStartPreview.fromJson(Map<String, dynamic>.from(json as Map)),
+      body,
+      (json) => ClientProcessStartPreview.fromJson(_requireMapData(json, fallbackMessage: body['message'] as String?)),
     );
 
     if (!envelope.success) {
@@ -51,9 +52,10 @@ class ClientProcessRepository {
       data: {'variables': variables},
     );
 
+    final body = Map<String, dynamic>.from(response.data ?? const {});
     final envelope = ApiResponse.fromJson(
-      Map<String, dynamic>.from(response.data ?? const {}),
-      (json) => ClientProcessStartResult.fromJson(Map<String, dynamic>.from(json as Map)),
+      body,
+      (json) => ClientProcessStartResult.fromJson(_requireMapData(json, fallbackMessage: body['message'] as String?)),
     );
 
     if (!envelope.success) {
@@ -104,4 +106,21 @@ List<T> _listFromJson<T>(dynamic json, T Function(Map<String, dynamic>) parser) 
       .whereType<Map>()
       .map((item) => parser(Map<String, dynamic>.from(item)))
       .toList();
+}
+
+Map<String, dynamic> _requireMapData(dynamic json, {String? fallbackMessage}) {
+  if (json is Map<String, dynamic>) {
+    return json;
+  }
+
+  if (json is Map) {
+    return Map<String, dynamic>.from(json);
+  }
+
+  final normalizedMessage = fallbackMessage?.trim();
+  throw Exception(
+    normalizedMessage != null && normalizedMessage.isNotEmpty
+        ? normalizedMessage
+        : 'El servidor no devolvio la informacion esperada.',
+  );
 }
