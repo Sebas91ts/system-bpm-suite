@@ -8,21 +8,21 @@ from utils.logger import get_logger
 
 router = APIRouter()
 logger = get_logger(__name__)
-service = AnalysisService()
-process_analysis_service = ProcessAnalysisService()
+service: AnalysisService | None = None
+process_analysis_service: ProcessAnalysisService | None = None
 
 
 @router.post("/analyze", response_model=AnalysisResponse)
 async def analyze(payload: AnalysisRequest) -> AnalysisResponse:
     logger.info("Request received at /ai/analyze")
-    return service.analyze(payload)
+    return get_analysis_service().analyze(payload)
 
 
 @router.post("/analyze-process", response_model=ProcessAnalysisResponse)
 async def analyze_process(payload: ProcessAnalysisRequest) -> ProcessAnalysisResponse:
     logger.info("Request received at /ai/analyze-process")
     try:
-        return process_analysis_service.analyze_process(payload)
+        return get_process_analysis_service().analyze_process(payload)
     except ValueError as exc:
         logger.exception("Process analysis returned invalid payload")
         raise HTTPException(status_code=502, detail=str(exc)) from exc
@@ -43,3 +43,17 @@ def _is_gemini_quota_error(exc: Exception) -> bool:
         or "resource_exhausted" in message
         or "quota exceeded" in message
     )
+
+
+def get_analysis_service() -> AnalysisService:
+    global service
+    if service is None:
+        service = AnalysisService()
+    return service
+
+
+def get_process_analysis_service() -> ProcessAnalysisService:
+    global process_analysis_service
+    if process_analysis_service is None:
+        process_analysis_service = ProcessAnalysisService()
+    return process_analysis_service

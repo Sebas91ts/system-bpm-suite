@@ -8,15 +8,15 @@ from utils.logger import get_logger
 
 router = APIRouter()
 logger = get_logger(__name__)
-service = DiagramService()
-edit_service = EditService()
+service: DiagramService | None = None
+edit_service: EditService | None = None
 
 
 @router.post("/generate-diagram", response_model=DiagramResponse)
 async def generate_diagram(payload: DiagramRequest) -> DiagramResponse:
     logger.info("Request received at /ai/generate-diagram")
     try:
-        return service.generate_structure(payload.text)
+        return get_diagram_service().generate_structure(payload.text)
     except ValueError as exc:
         logger.warning("Invalid diagram payload: %s", exc)
         raise HTTPException(status_code=502, detail=str(exc)) from exc
@@ -34,7 +34,7 @@ async def generate_diagram(payload: DiagramRequest) -> DiagramResponse:
 async def edit_diagram(payload: EditDiagramRequest) -> EditDiagramResponse:
     logger.info("Request received at /ai/edit-diagram")
     try:
-        return edit_service.edit_xml(payload)
+        return get_edit_service().edit_xml(payload)
     except RuntimeError as exc:
         logger.warning("Gemini unavailable while editing diagram: %s", exc)
         raise HTTPException(status_code=503, detail=str(exc)) from exc
@@ -58,3 +58,17 @@ def _is_gemini_quota_error(exc: Exception) -> bool:
         or "resource_exhausted" in message
         or "quota exceeded" in message
     )
+
+
+def get_diagram_service() -> DiagramService:
+    global service
+    if service is None:
+        service = DiagramService()
+    return service
+
+
+def get_edit_service() -> EditService:
+    global edit_service
+    if edit_service is None:
+        edit_service = EditService()
+    return edit_service

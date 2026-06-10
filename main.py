@@ -3,6 +3,7 @@ from fastapi import FastAPI
 from routers.analysis import router as analysis_router
 from routers.assistant import router as assistant_router
 from routers.diagram import router as diagram_router
+from routers.enterprise_ai import router as enterprise_ai_router
 from utils.logger import get_logger
 
 app = FastAPI(
@@ -22,3 +23,4 @@ async def health() -> dict[str, str]:
 app.include_router(assistant_router, prefix="/ai", tags=["assistant"])
 app.include_router(analysis_router, prefix="/ai", tags=["analysis"])
 app.include_router(diagram_router, prefix="/ai", tags=["diagram"])
+app.include_router(enterprise_ai_router, prefix="/ai", tags=["enterprise-ai"])

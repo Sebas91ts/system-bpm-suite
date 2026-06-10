@@ -8,15 +8,15 @@ from utils.logger import get_logger
 
 router = APIRouter()
 logger = get_logger(__name__)
-service = AssistantService()
-form_fill_service = FormFillService()
+service: AssistantService | None = None
+form_fill_service: FormFillService | None = None
 
 
 @router.post("/assistant", response_model=AssistantResponse)
 async def assistant(payload: AssistantRequest) -> AssistantResponse:
     logger.info("Request received at /ai/assistant")
     try:
-        response = service.answer(payload.message)
+        response = get_assistant_service().answer(payload.message)
         logger.info("Assistant response generated successfully")
         return AssistantResponse(response=response)
     except Exception as exc:
@@ -33,7 +33,7 @@ async def assistant(payload: AssistantRequest) -> AssistantResponse:
 async def fill_form(payload: FormFillRequest) -> FormFillResponse:
     logger.info("Request received at /ai/fill-form")
     try:
-        response = form_fill_service.suggest_values(payload)
+        response = get_form_fill_service().suggest_values(payload)
         logger.info("Form fill response generated successfully")
         return response
     except Exception as exc:
@@ -53,3 +53,17 @@ def _is_gemini_quota_error(exc: Exception) -> bool:
         or "resource_exhausted" in message
         or "quota exceeded" in message
     )
+
+
+def get_assistant_service() -> AssistantService:
+    global service
+    if service is None:
+        service = AssistantService()
+    return service
+
+
+def get_form_fill_service() -> FormFillService:
+    global form_fill_service
+    if form_fill_service is None:
+        form_fill_service = FormFillService()
+    return form_fill_service

@@ -1,7 +1,10 @@
 import json
 from typing import Any
 
-from google.genai import types
+try:
+    from google.genai import types
+except ModuleNotFoundError:
+    types = None
 
 from schemas.process_analysis_schema import ProcessAnalysisRequest, ProcessAnalysisResponse
 from services.gemini_service import GeminiService
@@ -24,14 +27,17 @@ class ProcessAnalysisService:
         self._normalize_payload(parsed)
         return ProcessAnalysisResponse.model_validate(parsed)
 
-    def _build_generation_config(self) -> types.GenerateContentConfig:
-        return types.GenerateContentConfig(
-            response_mime_type="application/json",
-            response_json_schema=ProcessAnalysisResponse.model_json_schema(),
-            max_output_tokens=12000,
-            temperature=0.15,
-            top_p=0.8,
-        )
+    def _build_generation_config(self) -> Any:
+        config = {
+            "response_mime_type": "application/json",
+            "response_json_schema": ProcessAnalysisResponse.model_json_schema(),
+            "max_output_tokens": 12000,
+            "temperature": 0.15,
+            "top_p": 0.8,
+        }
+        if types is None:
+            return config
+        return types.GenerateContentConfig(**config)
 
     def _build_prompt(self, payload: ProcessAnalysisRequest) -> str:
         metrics_json = json.dumps(payload.metrics or {}, ensure_ascii=False)
