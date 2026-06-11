@@ -49,6 +49,10 @@
 	</dict>
 	<key>UIApplicationSupportsIndirectInputEvents</key>
 	<true/>
+	<key>NSMicrophoneUsageDescription</key>
+	<string>La app usa el microfono para dictar mensajes al asistente IA.</string>
+	<key>NSSpeechRecognitionUsageDescription</key>
+	<string>La app usa reconocimiento de voz para convertir tu dictado en texto.</string>
 	<key>UILaunchStoryboardName</key>
 	<string>LaunchScreen</string>
 	<key>UIMainStoryboardFile</key>

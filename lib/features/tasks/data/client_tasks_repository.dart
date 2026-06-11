@@ -4,20 +4,28 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import '../../../core/models/api_response.dart';
 import '../../../core/models/client_task_models.dart';
 import '../../../core/network/api_client.dart';
+import '../../../core/network/offline_support.dart';
 
 final clientTasksRepositoryProvider = Provider<ClientTasksRepository>((ref) {
-  return ClientTasksRepository(ref.read(dioProvider));
+  return ClientTasksRepository(
+    ref.read(offlineAwareGetClientProvider),
+    ref.read(dioProvider),
+  );
 });
 
 class ClientTasksRepository {
-  ClientTasksRepository(this._dio);
+  ClientTasksRepository(this._reader, this._dio);
 
+  final OfflineAwareGetClient _reader;
   final Dio _dio;
 
   Future<List<ClientTaskListItem>> listTasks() async {
-    final response = await _dio.get<Map<String, dynamic>>('/client/tasks');
+    final body = await _reader.getJson(
+      '/client/tasks',
+      cacheKey: 'client_tasks',
+    );
     final envelope = ApiResponse.fromJson(
-      Map<String, dynamic>.from(response.data ?? const {}),
+      body,
       (json) => _listFromJson<ClientTaskListItem>(json, ClientTaskListItem.fromJson),
     );
 
@@ -29,9 +37,12 @@ class ClientTasksRepository {
   }
 
   Future<ClientTaskFormResponse> getForm(String taskId) async {
-    final response = await _dio.get<Map<String, dynamic>>('/client/tasks/$taskId/form');
+    final body = await _reader.getJson(
+      '/client/tasks/$taskId/form',
+      cacheKey: 'client_task_form:$taskId',
+    );
     final envelope = ApiResponse.fromJson(
-      Map<String, dynamic>.from(response.data ?? const {}),
+      body,
       (json) => ClientTaskFormResponse.fromJson(Map<String, dynamic>.from(json as Map)),
     );
 
@@ -43,11 +54,16 @@ class ClientTasksRepository {
   }
 
   Future<ClientTaskCompleteResponse> completeTask(String taskId, FormData payload) async {
-    final response = await _dio.post<Map<String, dynamic>>(
-      '/client/tasks/$taskId/complete',
-      data: payload,
-      options: Options(contentType: 'multipart/form-data'),
-    );
+    late final Response<Map<String, dynamic>> response;
+    try {
+      response = await _dio.post<Map<String, dynamic>>(
+        '/client/tasks/$taskId/complete',
+        data: payload,
+        options: Options(contentType: 'multipart/form-data'),
+      );
+    } catch (error) {
+      throw Exception(friendlyOfflineMessage(error));
+    }
 
     final envelope = ApiResponse.fromJson(
       Map<String, dynamic>.from(response.data ?? const {}),

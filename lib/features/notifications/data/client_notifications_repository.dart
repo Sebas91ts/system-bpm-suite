@@ -4,20 +4,28 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import '../../../core/models/api_response.dart';
 import '../../../core/models/notification_models.dart';
 import '../../../core/network/api_client.dart';
+import '../../../core/network/offline_support.dart';
 
 final clientNotificationsRepositoryProvider = Provider<ClientNotificationsRepository>((ref) {
-  return ClientNotificationsRepository(ref.read(dioProvider));
+  return ClientNotificationsRepository(
+    ref.read(offlineAwareGetClientProvider),
+    ref.read(dioProvider),
+  );
 });
 
 class ClientNotificationsRepository {
-  ClientNotificationsRepository(this._dio);
+  ClientNotificationsRepository(this._reader, this._dio);
 
+  final OfflineAwareGetClient _reader;
   final Dio _dio;
 
   Future<List<NotificationItem>> listNotifications() async {
-    final response = await _dio.get<Map<String, dynamic>>('/notifications/me');
+    final body = await _reader.getJson(
+      '/notifications/me',
+      cacheKey: 'client_notifications',
+    );
     final envelope = ApiResponse.fromJson(
-      Map<String, dynamic>.from(response.data ?? const {}),
+      body,
       (json) => _listFromJson<NotificationItem>(json, NotificationItem.fromJson),
     );
 
@@ -29,9 +37,12 @@ class ClientNotificationsRepository {
   }
 
   Future<int> unreadCount() async {
-    final response = await _dio.get<Map<String, dynamic>>('/notifications/me/unread-count');
+    final body = await _reader.getJson(
+      '/notifications/me/unread-count',
+      cacheKey: 'client_notifications_unread_count',
+    );
     final envelope = ApiResponse.fromJson(
-      Map<String, dynamic>.from(response.data ?? const {}),
+      body,
       (json) => NotificationUnreadCount.fromJson(Map<String, dynamic>.from(json as Map)),
     );
 
@@ -43,11 +54,19 @@ class ClientNotificationsRepository {
   }
 
   Future<void> markAsRead(String id) async {
-    await _dio.patch<Map<String, dynamic>>('/notifications/$id/read', data: {});
+    try {
+      await _dio.patch<Map<String, dynamic>>('/notifications/$id/read', data: {});
+    } catch (error) {
+      throw Exception(friendlyOfflineMessage(error));
+    }
   }
 
   Future<void> markAllAsRead() async {
-    await _dio.patch<Map<String, dynamic>>('/notifications/me/read-all', data: {});
+    try {
+      await _dio.patch<Map<String, dynamic>>('/notifications/me/read-all', data: {});
+    } catch (error) {
+      throw Exception(friendlyOfflineMessage(error));
+    }
   }
 
   List<T> _listFromJson<T>(dynamic json, T Function(Map<String, dynamic>) parser) {

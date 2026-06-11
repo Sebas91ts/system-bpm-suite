@@ -1,23 +1,25 @@
-import 'package:dio/dio.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import '../../../core/models/api_response.dart';
 import '../../../core/models/process_models.dart';
-import '../../../core/network/api_client.dart';
+import '../../../core/network/offline_support.dart';
 
 final clientInstancesRepositoryProvider = Provider<ClientInstancesRepository>((ref) {
-  return ClientInstancesRepository(ref.read(dioProvider));
+  return ClientInstancesRepository(ref.read(offlineAwareGetClientProvider));
 });
 
 class ClientInstancesRepository {
-  ClientInstancesRepository(this._dio);
+  ClientInstancesRepository(this._reader);
 
-  final Dio _dio;
+  final OfflineAwareGetClient _reader;
 
   Future<List<ClientProcessInstanceItem>> listInstances() async {
-    final response = await _dio.get<Map<String, dynamic>>('/client/instances');
+    final body = await _reader.getJson(
+      '/client/instances',
+      cacheKey: 'client_instances',
+    );
     final envelope = ApiResponse.fromJson(
-      Map<String, dynamic>.from(response.data ?? const {}),
+      body,
       (json) => _listFromJson<ClientProcessInstanceItem>(json, ClientProcessInstanceItem.fromJson),
     );
 
