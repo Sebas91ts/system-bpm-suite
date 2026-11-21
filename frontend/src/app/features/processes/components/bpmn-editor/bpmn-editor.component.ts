@@ -1,0 +1,2874 @@
+import { CommonModule } from '@angular/common';
+import {
+  AfterViewInit,
+  ChangeDetectorRef,
+  Component,
+  ElementRef,
+  Input,
+  OnChanges,
+  OnDestroy,
+  SimpleChanges,
+  ViewChild,
+} from '@angular/core';
+import Modeler from 'bpmn-js/lib/Modeler';
+import { BpmnPropertiesPanelModule, BpmnPropertiesProviderModule } from 'bpmn-js-properties-panel';
+import { finalize } from 'rxjs';
+import * as Y from 'yjs';
+import { WebsocketProvider } from 'y-websocket';
+import { environment } from '../../../../../environments/environment';
+import { Area } from '../../../../core/models/area.models';
+import { ApiResponse } from '../../../../core/models/auth.models';
+import {
+  FormDefinition,
+  FormFieldDefinition,
+  FormFieldOptionDefinition,
+  FormFieldType,
+} from '../../../../core/models/form.models';
+import { DocumentRequirement, TaskDocumentConfig, TaskDocumentConfigCreateRequest } from '../../../../core/models/document-config.models';
+import { AreaService } from '../../../../core/services/area.service';
+import { AuthService } from '../../../../core/services/auth.service';
+import { FormService } from '../../../../core/services/form.service';
+import { ProcessService } from '../../../../core/services/process.service';
+import { TaskDocumentConfigService } from '../../../../core/services/task-document-config.service';
+import { EMPTY_BPMN_XML } from '../../shared/bpmn-templates';
+import { validateExclusiveGatewayXml } from '../../shared/bpmn-gateway-validation';
+import { customModdle } from '../../shared/custom-moddle';
+import { UmlActivityRendererModule } from '../../shared/uml-activity-renderer.module';
+import {
+  ConditionFieldOption,
+  ConditionOperator,
+  ExclusiveGatewayValidationResult,
+  LaneAreaBinding,
+  LaneValidationResult,
+  SequenceFlowTechnicalState,
+} from './bpmn-editor.types';
+import { LaneAssignmentPanelComponent } from './lane-assignment-panel.component';
+import { SequenceFlowTechnicalPanelComponent } from './sequence-flow-technical-panel.component';
+import { TaskFormAssignmentCardComponent } from './task-form-assignment-card.component';
+import { TaskFormModalComponent } from './task-form-modal.component';
+import { TaskDocumentAssignmentCardComponent } from './task-document-assignment-card.component';
+import { TaskDocumentModalComponent } from './task-document-modal.component';
+
+type SaveXmlResult = {
+  xml?: string;
+};
+
+type CollaborationUser = {
+  clientId: number;
+  name: string;
+  email: string;
+  color: string;
+  mode: 'editando' | 'lectura';
+};
+
+type SaveState = 'idle' | 'dirty' | 'saving' | 'saved' | 'readonly' | 'offline' | 'error';
+
+@Component({
+  selector: 'app-bpmn-editor',
+  standalone: true,
+  imports: [
+    CommonModule,
+    LaneAssignmentPanelComponent,
+    SequenceFlowTechnicalPanelComponent,
+    TaskFormAssignmentCardComponent,
+    TaskFormModalComponent,
+    TaskDocumentAssignmentCardComponent,
+    TaskDocumentModalComponent,
+  ],
+  templateUrl: './bpmn-editor.component.html',
+  styleUrl: './bpmn-editor.component.css',
+})
+export class BpmnEditorComponent implements AfterViewInit, OnDestroy, OnChanges {
+  @Input() processName = '';
+  @Input() processId: string | null = null;
+  @Input() processKey = '';
+  @Input() processVersion: number | null = null;
+  @Input() processState = '';
+  @Input() readonlyMode = false;
+  @Input() autoCreateDiagram = true;
+
+  @ViewChild('canvasHost', { static: true })
+  private readonly canvasHostRef!: ElementRef<HTMLDivElement>;
+
+  @ViewChild('propertiesHost', { static: true })
+  private readonly propertiesHostRef!: ElementRef<HTMLDivElement>;
+
+  private modeler: Modeler | null = null;
+  private resizeObserver: ResizeObserver | null = null;
+  private selectionChangedHandler?: (event: any) => void;
+  private commandStackChangedHandler?: () => void;
+  private laneOverlayIds = new Map<string, string>();
+  private overlayRefreshFrameId: number | null = null;
+  private umlCanvasRefreshFrameId: number | null = null;
+  private ydoc: Y.Doc | null = null;
+  private provider: WebsocketProvider | null = null;
+  private sharedProcessMap: Y.Map<string | number> | null = null;
+  private sharedMapObserver?: (event: Y.YMapEvent<string | number>) => void;
+  private collaborationRoom = '';
+  private currentImportedXml = '';
+  private isApplyingRemoteChange = false;
+  private collaborationSyncTimer: ReturnType<typeof setTimeout> | null = null;
+  private autosaveTimer: ReturnType<typeof setTimeout> | null = null;
+  private lastBackendSaveAt = 0;
+  private lastSavedXml = '';
+  private pendingAutosaveXml = '';
+  private aiAnalysisHighlightedIds = new Set<string>();
+  protected isAutosaving = false;
+  private readonly autosaveDebounceMs = 5000;
+  private readonly backendSaveMinIntervalMs = 10000;
+
+  protected selectedLaneElement: any | null = null;
+  protected activeAreas: Area[] = [];
+  protected selectedLaneAreaId = '';
+  protected selectedLaneAreaName = '';
+  protected laneBindingMessage = '';
+  protected isAreasLoading = false;
+  protected areasError = '';
+
+  protected selectedSequenceFlowElement: any | null = null;
+  protected availableConditionFields: ConditionFieldOption[] = [];
+  protected conditionFieldsLoading = false;
+  protected conditionFieldsError = '';
+  protected conditionFieldsEmptyMessage = '';
+  protected selectedSequenceFlowFieldName = '';
+  protected selectedSequenceFlowOperator: ConditionOperator | '' = '';
+  protected selectedSequenceFlowValue = '';
+  protected selectedSequenceFlowGeneratedExpression = '';
+  protected selectedSequenceFlowParseWarning = '';
+  protected selectedSequenceFlowValidationMessage = '';
+  protected selectedSequenceFlowDefaultDraft = false;
+  protected sequenceFlowFeedbackMessage = '';
+
+  protected selectedUserTask: any | null = null;
+  protected taskFormPanelOpen = false;
+  protected formLoading = false;
+  protected formSaving = false;
+  protected formError = '';
+  protected formSuccess = '';
+  protected taskFormDefinition: FormDefinition | null = null;
+  protected taskDocumentPanelOpen = false;
+  protected documentConfigLoading = false;
+  protected documentConfigSaving = false;
+  protected documentConfigError = '';
+  protected documentConfigSuccess = '';
+  protected taskDocumentConfig: TaskDocumentConfig | null = null;
+  protected documentConfigDraft: TaskDocumentConfigCreateRequest = this.createEmptyDocumentConfigDraft();
+  protected formDraft: FormDefinition = {
+    id: '',
+    processKey: '',
+    processVersion: 0,
+    taskDefinitionKey: '',
+    title: '',
+    fields: [],
+    active: true,
+  };
+
+  readonly sampleXml = EMPTY_BPMN_XML;
+  protected collaborationUsers: CollaborationUser[] = [];
+  protected isCollaborationConnected = false;
+  protected isReadOnlyByCapacity = false;
+  protected saveState: SaveState = 'idle';
+  protected lastSavedAtLabel = '';
+  protected autosaveErrorMessage = '';
+  private processFormDefinitions: FormDefinition[] = [];
+  private loadedConditionProcessKey = '';
+  private sequenceFlowRefreshSnapshot: any | null = null;
+
+  constructor(
+    private readonly areaService: AreaService,
+    private readonly formService: FormService,
+    private readonly taskDocumentConfigService: TaskDocumentConfigService,
+    private readonly processService: ProcessService,
+    private readonly authService: AuthService,
+    private readonly cdr: ChangeDetectorRef,
+  ) {}
+
+  async ngAfterViewInit(): Promise<void> {
+    this.initializeModeler();
+    this.setupResizeHandling();
+    this.setupSelectionHandling();
+    setTimeout(() => {
+      this.loadActiveAreas();
+    }, 0);
+    setTimeout(() => {
+      this.loadAvailableConditionFields();
+    }, 0);
+    if (this.autoCreateDiagram) {
+      setTimeout(() => {
+        void this.createNewDiagram();
+      }, 0);
+    }
+    setTimeout(() => {
+      this.configureCollaboration();
+    }, 0);
+  }
+
+  ngOnChanges(changes: SimpleChanges): void {
+    if (changes['processKey'] || changes['processName']) {
+      this.loadAvailableConditionFields();
+    }
+
+    if (
+      changes['processId'] ||
+      changes['processKey'] ||
+      changes['processVersion'] ||
+      changes['processState'] ||
+      changes['readonlyMode']
+    ) {
+      this.refreshCollaborationMode();
+      setTimeout(() => {
+        this.configureCollaboration();
+      }, 0);
+    }
+  }
+
+  ngOnDestroy(): void {
+    this.resizeObserver?.disconnect();
+    this.resizeObserver = null;
+    this.disconnectCollaboration();
+    this.clearAutosaveTimer();
+    this.clearCollaborationSyncTimer();
+    this.laneOverlayIds.clear();
+    this.selectionChangedHandler = undefined;
+    this.commandStackChangedHandler = undefined;
+    if (this.overlayRefreshFrameId !== null) {
+      cancelAnimationFrame(this.overlayRefreshFrameId);
+      this.overlayRefreshFrameId = null;
+    }
+    if (this.umlCanvasRefreshFrameId !== null) {
+      cancelAnimationFrame(this.umlCanvasRefreshFrameId);
+      this.umlCanvasRefreshFrameId = null;
+    }
+    this.modeler?.destroy();
+    this.modeler = null;
+    this.selectedLaneElement = null;
+  }
+
+  async createNewDiagram(): Promise<void> {
+    await this.importFromXml(EMPTY_BPMN_XML);
+  }
+
+  async importFromXml(xml: string): Promise<void> {
+    if (!this.modeler) {
+      return;
+    }
+
+    const normalizedXml = this.normalizeExportedXml(xml.trim());
+    if (!normalizedXml) {
+      throw new Error('Debes proporcionar un XML valido del diagrama para importar.');
+    }
+
+    await this.modeler.importXML(normalizedXml);
+    this.currentImportedXml = normalizedXml;
+    if (!this.lastSavedXml) {
+      this.lastSavedXml = this.currentImportedXml;
+    }
+    this.clearLaneSelection();
+    this.clearSequenceFlowSelection();
+    this.clearAiAnalysisHighlights();
+    this.restoreLaneAreaBindings();
+    this.refreshLaneAreaOverlays();
+    this.scheduleUmlCanvasRefresh();
+    this.scheduleFitViewport();
+    this.seedSharedXmlIfNeeded(this.currentImportedXml);
+  }
+
+  async exportToXml(): Promise<string> {
+    if (!this.modeler) {
+      throw new Error('El modelador del diagrama no ha sido inicializado.');
+    }
+
+    const result = (await this.modeler.saveXML({ format: true })) as SaveXmlResult;
+    return this.normalizeExportedXml(result.xml ?? '');
+  }
+
+  zoomIn(): void {
+    this.stepZoom(0.2);
+  }
+
+  zoomOut(): void {
+    this.stepZoom(-0.2);
+  }
+
+  resetView(): void {
+    this.fitViewport();
+  }
+
+  public highlightAiAnalysisElement(elementId?: string | null): void {
+    const normalizedId = elementId?.trim();
+    if (!this.modeler || !normalizedId) {
+      return;
+    }
+
+    const elementRegistry = this.modeler.get('elementRegistry') as {
+      get: (id: string) => any | null;
+    };
+    const element = elementRegistry.get(normalizedId);
+    if (!element) {
+      return;
+    }
+
+    const canvas = this.modeler.get('canvas') as {
+      addMarker: (id: string, marker: string) => void;
+    };
+    canvas.addMarker(normalizedId, 'ai-analysis-highlight');
+    this.aiAnalysisHighlightedIds.add(normalizedId);
+  }
+
+  public clearAiAnalysisHighlights(): void {
+    if (!this.modeler || this.aiAnalysisHighlightedIds.size === 0) {
+      this.aiAnalysisHighlightedIds.clear();
+      return;
+    }
+
+    const canvas = this.modeler.get('canvas') as {
+      removeMarker: (id: string, marker: string) => void;
+    };
+    for (const elementId of this.aiAnalysisHighlightedIds) {
+      canvas.removeMarker(elementId, 'ai-analysis-highlight');
+    }
+    this.aiAnalysisHighlightedIds.clear();
+  }
+
+  public validateLaneAssignments(): LaneValidationResult {
+    if (!this.modeler) {
+      return {
+        valid: false,
+        missingLaneNames: [],
+        message: 'El modelador del diagrama no esta inicializado.',
+      };
+    }
+
+    if (this.isAreasLoading) {
+      return {
+        valid: false,
+        missingLaneNames: [],
+        message: 'Espera a que carguen las areas activas antes de guardar.',
+      };
+    }
+
+    const missingLaneNames = this.getLaneElements()
+      .filter((laneElement) => {
+        const binding = this.resolveLaneAreaBinding(laneElement);
+        if (!binding.areaId) {
+          return true;
+        }
+
+        return !this.activeAreas.some((area) => area.id === binding.areaId);
+      })
+      .map((laneElement) => laneElement?.businessObject?.name?.trim?.() || laneElement?.id || 'Particion sin nombre');
+
+    if (missingLaneNames.length === 0) {
+      return {
+        valid: true,
+        missingLaneNames: [],
+        message: '',
+      };
+    }
+
+    return {
+      valid: false,
+      missingLaneNames,
+      message: `Debes asignar un area a todas las particiones antes de guardar: ${missingLaneNames.join(', ')}.`,
+    };
+  }
+
+  public async validateExclusiveGatewayAssignments(): Promise<ExclusiveGatewayValidationResult> {
+    try {
+      return validateExclusiveGatewayXml(await this.exportToXml());
+    } catch {
+      return {
+        valid: false,
+        message: 'No se pudo exportar el XML interno para validar los nodos de decision.',
+        invalidGatewayIds: [],
+      };
+    }
+  }
+
+  protected get selectedLaneName(): string {
+    return this.selectedLaneElement?.businessObject?.name || this.selectedLaneElement?.id || 'Ninguna particion seleccionada';
+  }
+
+  protected get selectedLaneAreaLabel(): string {
+    if (!this.selectedLaneAreaId) {
+      return 'Sin area asignada';
+    }
+
+    return this.activeAreas.find((area) => area.id === this.selectedLaneAreaId)?.nombre ?? 'Area no encontrada';
+  }
+
+  protected get selectedUserTaskLabel(): string {
+    return this.selectedUserTask?.businessObject?.name || this.selectedUserTask?.id || 'Ninguna accion seleccionada';
+  }
+
+  protected get taskFormContext(): string {
+    return `${this.processKey || 'processKey no disponible'} | v${this.processVersion ?? 1} | ${this.formDraft.taskDefinitionKey || 'taskDefinitionKey no disponible'}`;
+  }
+
+  protected get taskDocumentContext(): string {
+    return `${this.processKey || 'processKey no disponible'} | v${this.processVersion ?? 1} | ${this.documentConfigDraft.taskDefinitionKey || 'taskDefinitionKey no disponible'}`;
+  }
+
+  protected get hasTaskForm(): boolean {
+    return !!this.taskFormDefinition;
+  }
+
+  protected get hasTaskDocumentConfig(): boolean {
+    return !!this.taskDocumentConfig;
+  }
+
+  protected get taskDocumentSummary(): string {
+    const requirements = this.documentConfigDraft.documentRequirements ?? [];
+    if (!this.taskDocumentConfig && !requirements.length) {
+      return 'Sin documentos configurados';
+    }
+    const total = requirements.length;
+    const required = requirements.filter((requirement) => requirement.required).length;
+    const editable = requirements.filter((requirement) => requirement.editable).length;
+    const approval = requirements.filter((requirement) => requirement.requireApproval).length;
+    const parts = [`${total} documento${total === 1 ? '' : 's'} configurado${total === 1 ? '' : 's'}`];
+    if (required) {
+      parts.push(`${required} obligatorio${required === 1 ? '' : 's'}`);
+    }
+    if (editable) {
+      parts.push(`${editable} editable${editable === 1 ? '' : 's'} en OnlyOffice`);
+    }
+    if (approval) {
+      parts.push(`${approval} requiere${approval === 1 ? '' : 'n'} aprobacion`);
+    }
+    return parts.join(' · ');
+  }
+
+  protected get selectedSequenceFlowTechnicalState(): SequenceFlowTechnicalState | null {
+    if (!this.selectedSequenceFlowElement) {
+      return null;
+    }
+
+    const businessObject = this.selectedSequenceFlowElement.businessObject;
+    const sourceGateway = businessObject?.sourceRef;
+    const target = businessObject?.targetRef;
+
+    return {
+      flowId: businessObject?.id || this.selectedSequenceFlowElement.id || 'sequenceFlow sin id',
+      sourceGatewayId: sourceGateway?.id || 'Nodo de control sin id',
+      sourceGatewayLabel: sourceGateway?.name || sourceGateway?.id || 'Nodo de control',
+      targetId: target?.id || 'Nodo destino sin id',
+      targetLabel: target?.name || target?.id || 'Nodo destino',
+      conditionExpression: this.readSequenceFlowCondition(this.selectedSequenceFlowElement),
+      isDefaultFlow: this.isDefaultSequenceFlow(this.selectedSequenceFlowElement),
+    };
+  }
+
+  protected onLaneAreaChange(areaId: string): void {
+    if (!this.modeler || !this.selectedLaneElement || this.isEffectiveReadonly) {
+      return;
+    }
+
+    this.selectedLaneAreaId = areaId;
+    this.updateLaneAreaReference(areaId);
+  }
+
+  protected onSequenceFlowFieldChange(fieldName: string): void {
+    this.selectedSequenceFlowFieldName = fieldName;
+    const selectedField = this.getSelectedConditionField();
+    const validOperators = this.getOperatorOptionsForField(selectedField).map((item) => item.value);
+    if (!this.selectedSequenceFlowOperator || !validOperators.includes(this.selectedSequenceFlowOperator)) {
+      this.selectedSequenceFlowOperator = '';
+    }
+    if (selectedField?.type === 'select') {
+      console.log('[ConditionBuilder] selected select field:', selectedField);
+      if (!this.getConditionFieldOptions(selectedField).some((option) => option.value === this.selectedSequenceFlowValue)) {
+        this.selectedSequenceFlowValue = '';
+      }
+    }
+    if (selectedField?.type === 'checkbox') {
+      this.selectedSequenceFlowValue = '';
+    }
+    this.selectedSequenceFlowParseWarning = '';
+    this.selectedSequenceFlowValidationMessage = '';
+    console.debug('[SequenceFlowBuilder] field selected', {
+      fieldName: selectedField?.name ?? fieldName,
+      fieldType: selectedField?.type ?? 'unknown',
+      fieldOptions: this.getConditionFieldOptions(selectedField),
+      selectedOperator: this.selectedSequenceFlowOperator,
+      selectedValue: this.selectedSequenceFlowValue,
+    });
+    this.refreshGeneratedExpressionPreview();
+  }
+
+  protected onSequenceFlowOperatorChange(operator: ConditionOperator | ''): void {
+    this.selectedSequenceFlowOperator = operator;
+    if (!this.operatorRequiresValue(operator)) {
+      this.selectedSequenceFlowValue = '';
+    }
+    this.selectedSequenceFlowParseWarning = '';
+    this.selectedSequenceFlowValidationMessage = '';
+    this.refreshGeneratedExpressionPreview();
+  }
+
+  protected onSequenceFlowValueChange(value: unknown): void {
+    this.selectedSequenceFlowValue = this.normalizeSequenceFlowValue(value);
+    this.selectedSequenceFlowValidationMessage = '';
+    this.refreshGeneratedExpressionPreview();
+  }
+
+  protected onSequenceFlowDefaultDraftChange(value: boolean): void {
+    this.selectedSequenceFlowDefaultDraft = value;
+    this.sequenceFlowFeedbackMessage = '';
+    this.selectedSequenceFlowValidationMessage = '';
+    if (value) {
+      this.selectedSequenceFlowFieldName = '';
+      this.selectedSequenceFlowOperator = '';
+      this.selectedSequenceFlowValue = '';
+      this.selectedSequenceFlowParseWarning = '';
+    }
+    this.refreshGeneratedExpressionPreview();
+  }
+
+  protected applySequenceFlowTechnicalChanges(): void {
+    if (!this.selectedSequenceFlowElement || this.isEffectiveReadonly) {
+      return;
+    }
+
+    const validationMessage = this.validateSequenceFlowBuilder();
+    this.selectedSequenceFlowValidationMessage = validationMessage;
+    if (validationMessage) {
+      this.sequenceFlowFeedbackMessage = '';
+      this.cdr.markForCheck();
+      return;
+    }
+
+    this.updateSequenceFlowCondition(this.selectedSequenceFlowGeneratedExpression);
+    this.updateSequenceFlowDefault(this.selectedSequenceFlowDefaultDraft);
+    this.syncSelectedSequenceFlowState();
+    this.sequenceFlowFeedbackMessage = this.selectedSequenceFlowDefaultDraft
+      ? 'Transicion por defecto actualizada correctamente.'
+      : 'Guarda de transicion guardada correctamente.';
+    this.cdr.markForCheck();
+  }
+
+  protected closeTaskFormPanel(): void {
+    if (!this.formSaving) {
+      this.taskFormPanelOpen = false;
+    }
+  }
+
+  protected closeTaskDocumentPanel(): void {
+    if (!this.documentConfigSaving) {
+      this.taskDocumentPanelOpen = false;
+    }
+  }
+
+  protected openTaskFormPanel(taskElement?: any): void {
+    const userTask = taskElement ?? this.selectedUserTask;
+    if (!userTask || this.isEffectiveReadonly) {
+      return;
+    }
+
+    this.closeContextPad();
+    this.taskFormPanelOpen = true;
+    this.formError = '';
+    this.formSuccess = '';
+    this.formLoading = true;
+    this.cdr.markForCheck();
+
+    const taskDefinitionKey = userTask.businessObject?.id || userTask.id;
+    const payloadProcessKey = this.normalizeProcessKey(this.processKey || this.processName);
+    const payloadVersion = this.processVersion ?? 1;
+
+    this.formService.obtenerFormulario(payloadProcessKey, payloadVersion, taskDefinitionKey).subscribe({
+      next: (response: ApiResponse<FormDefinition>) => {
+        const definition = response.data ?? null;
+        console.log('FORM GUARDADO:', definition);
+        this.taskFormDefinition = definition;
+        this.formDraft = definition
+          ? {
+              ...definition,
+              fields: (definition.fields ?? []).map((field) => ({
+                ...field,
+                options: [...(field.options ?? [])],
+                optionItems: (field.optionItems ?? []).map((option) => ({ ...option })),
+              })),
+            }
+          : {
+              id: '',
+              processKey: payloadProcessKey,
+              processVersion: payloadVersion,
+              taskDefinitionKey,
+              title: `${userTask.businessObject?.name || userTask.id} formulario`,
+              fields: [],
+              active: true,
+            };
+        this.formLoading = false;
+        this.cdr.markForCheck();
+      },
+      error: () => {
+        this.taskFormDefinition = null;
+        this.formDraft = {
+          id: '',
+          processKey: payloadProcessKey,
+          processVersion: payloadVersion,
+          taskDefinitionKey,
+          title: `${userTask.businessObject?.name || userTask.id} formulario`,
+          fields: [],
+          active: true,
+        };
+        this.formLoading = false;
+        this.cdr.markForCheck();
+      },
+    });
+  }
+
+  protected openTaskDocumentPanel(taskElement?: any): void {
+    const userTask = taskElement ?? this.selectedUserTask;
+    if (!userTask || this.isEffectiveReadonly) {
+      return;
+    }
+
+    this.closeContextPad();
+    this.taskDocumentPanelOpen = true;
+    this.documentConfigError = '';
+    this.documentConfigSuccess = '';
+    this.documentConfigLoading = true;
+
+    const taskDefinitionKey = userTask.businessObject?.id || userTask.id;
+    const payloadProcessKey = this.processKey || this.normalizeProcessKey(this.processName) || 'proceso_sin_key';
+    const payloadVersion = this.processVersion ?? 1;
+
+    this.taskDocumentConfigService.obtenerConfig(payloadProcessKey, payloadVersion, taskDefinitionKey).subscribe({
+      next: (response) => {
+        const config = response.data;
+        this.taskDocumentConfig = config ?? null;
+        this.documentConfigDraft = config
+          ? this.toDocumentConfigDraft(config)
+          : this.createEmptyDocumentConfigDraft(payloadProcessKey, payloadVersion, taskDefinitionKey, userTask.businessObject?.name || userTask.id);
+        this.documentConfigLoading = false;
+        this.cdr.markForCheck();
+      },
+      error: (error) => {
+        if (error?.status === 404) {
+          this.taskDocumentConfig = null;
+          this.documentConfigDraft = this.createEmptyDocumentConfigDraft(payloadProcessKey, payloadVersion, taskDefinitionKey, userTask.businessObject?.name || userTask.id);
+          this.documentConfigLoading = false;
+          this.cdr.markForCheck();
+          return;
+        }
+        console.error('[BpmnEditor] document config load failed', error);
+        this.taskDocumentConfig = null;
+        this.documentConfigDraft = this.createEmptyDocumentConfigDraft(payloadProcessKey, payloadVersion, taskDefinitionKey, userTask.businessObject?.name || userTask.id);
+        this.documentConfigError = error?.error?.message || 'No se pudo cargar la configuracion documental.';
+        this.documentConfigLoading = false;
+        this.cdr.markForCheck();
+      },
+    });
+  }
+
+  protected addDocumentAreaRule(areaId: string): void {
+    const normalizedAreaId = areaId?.trim();
+    if (!normalizedAreaId) {
+      return;
+    }
+    const rules = this.documentConfigDraft.accessRules ?? [];
+    if (rules.some((rule) => rule.areaId === normalizedAreaId)) {
+      return;
+    }
+    this.documentConfigDraft.accessRules = [
+      ...rules,
+      {
+        areaId: normalizedAreaId,
+        canView: true,
+        canDownload: true,
+        canUpload: false,
+        canEdit: false,
+        canApprove: false,
+        canReject: false,
+        canLock: false,
+      },
+    ];
+    this.documentConfigDraft.allowedAreaIds = this.documentConfigDraft.accessRules.map((rule) => rule.areaId);
+  }
+
+  protected removeDocumentAreaRule(index: number): void {
+    this.documentConfigDraft.accessRules = (this.documentConfigDraft.accessRules ?? []).filter((_, currentIndex) => currentIndex !== index);
+    this.documentConfigDraft.allowedAreaIds = this.documentConfigDraft.accessRules.map((rule) => rule.areaId);
+  }
+
+  protected saveTaskDocumentConfig(): void {
+    if (!this.documentConfigDraft.processKey || !this.documentConfigDraft.processVersion || !this.documentConfigDraft.taskDefinitionKey) {
+      this.documentConfigError = 'Falta contexto del proceso o de la tarea.';
+      return;
+    }
+
+    this.documentConfigSaving = true;
+    this.documentConfigError = '';
+    this.documentConfigSuccess = '';
+    const firstRequirement = this.documentConfigDraft.documentRequirements?.[0];
+    const request: TaskDocumentConfigCreateRequest = {
+      ...this.documentConfigDraft,
+      documentName: firstRequirement?.name || this.documentConfigDraft.documentName,
+      description: firstRequirement?.description || this.documentConfigDraft.description,
+      documentDirection: firstRequirement?.documentDirection || this.documentConfigDraft.documentDirection,
+      required: firstRequirement?.required ?? this.documentConfigDraft.required,
+      allowUpload: firstRequirement?.allowUpload ?? this.documentConfigDraft.allowUpload,
+      allowMultipleFiles: firstRequirement?.allowMultipleFiles ?? this.documentConfigDraft.allowMultipleFiles,
+      editable: firstRequirement?.editable ?? this.documentConfigDraft.editable,
+      collaborativeEditing: firstRequirement?.collaborativeEditing ?? this.documentConfigDraft.collaborativeEditing,
+      requireApproval: firstRequirement?.requireApproval ?? this.documentConfigDraft.requireApproval,
+      readOnlyAfterComplete: firstRequirement?.readOnlyAfterComplete ?? this.documentConfigDraft.readOnlyAfterComplete,
+      allowedMimeTypes: firstRequirement?.allowedMimeTypes ?? this.documentConfigDraft.allowedMimeTypes,
+      maxFileSizeBytes: firstRequirement?.maxFileSizeBytes ?? this.documentConfigDraft.maxFileSizeBytes,
+      maxFiles: firstRequirement?.maxFiles ?? this.documentConfigDraft.maxFiles,
+      ownerAreaId: firstRequirement?.ownerAreaId ?? this.documentConfigDraft.ownerAreaId,
+      documentRequirements: (this.documentConfigDraft.documentRequirements ?? []).map((requirement) => ({
+        ...requirement,
+        allowedAreaIds: (requirement.accessRules ?? []).map((rule) => rule.areaId).filter(Boolean),
+      })),
+      allowedAreaIds: (this.documentConfigDraft.documentRequirements?.[0]?.accessRules ?? []).map((rule) => rule.areaId).filter(Boolean),
+      permissions: {
+        canView: true,
+        canUpload: (this.documentConfigDraft.documentRequirements ?? []).some((requirement) => requirement.allowUpload !== false),
+        canEdit: (this.documentConfigDraft.documentRequirements ?? []).some((requirement) => !!requirement.editable),
+        canDelete: false,
+        canApprove: (this.documentConfigDraft.documentRequirements ?? []).some((requirement) => !!requirement.requireApproval),
+        canDownload: true,
+        canReject: (this.documentConfigDraft.documentRequirements ?? []).some((requirement) => !!requirement.requireApproval),
+        canLock: (this.documentConfigDraft.documentRequirements ?? []).some((requirement) => !!requirement.editable),
+      },
+    };
+
+    this.taskDocumentConfigService.guardarConfig(request)
+      .pipe(finalize(() => {
+        this.documentConfigSaving = false;
+        this.cdr.markForCheck();
+      }))
+      .subscribe({
+        next: (response) => {
+          this.taskDocumentConfig = response.data ?? null;
+          if (response.data) {
+            this.documentConfigDraft = this.toDocumentConfigDraft(response.data);
+          }
+          this.documentConfigSuccess = 'Configuracion documental guardada correctamente.';
+        },
+        error: (error) => {
+          console.error('[BpmnEditor] document config save failed', error);
+          this.documentConfigError = error?.error?.message || 'No se pudo guardar la configuracion documental.';
+        },
+      });
+  }
+
+  protected addFormField(): void {
+    this.formDraft.fields = [
+      ...(this.formDraft.fields ?? []),
+      {
+        name: '',
+        label: '',
+        type: 'text',
+        required: false,
+        placeholder: '',
+        helpText: '',
+        order: (this.formDraft.fields?.length ?? 0) + 1,
+        options: [],
+        optionItems: [],
+      },
+    ];
+  }
+
+  protected removeFormField(index: number): void {
+    this.formDraft.fields = (this.formDraft.fields ?? []).filter((_, currentIndex) => currentIndex !== index);
+    this.reorderFormFields();
+  }
+
+  protected moveField(index: number, direction: -1 | 1): void {
+    const fields = [...(this.formDraft.fields ?? [])];
+    const target = index + direction;
+    if (target < 0 || target >= fields.length) {
+      return;
+    }
+
+    [fields[index], fields[target]] = [fields[target], fields[index]];
+    this.formDraft.fields = fields;
+    this.reorderFormFields();
+  }
+
+  protected saveTaskForm(): void {
+    if (!this.formDraft.processKey || !this.formDraft.processVersion || !this.formDraft.taskDefinitionKey) {
+      this.formError = 'Falta contexto del proceso o de la tarea.';
+      return;
+    }
+
+    const fieldValidationError = this.validateFormDraftFields();
+    if (fieldValidationError) {
+      this.formError = fieldValidationError;
+      this.formSuccess = '';
+      return;
+    }
+
+    this.formSaving = true;
+    this.formError = '';
+    this.formSuccess = '';
+
+    const request = {
+      processKey: this.formDraft.processKey,
+      processVersion: this.formDraft.processVersion,
+      taskDefinitionKey: this.formDraft.taskDefinitionKey,
+      title: this.formDraft.title,
+      fields: (this.formDraft.fields ?? []).map((field, index) =>
+        this.normalizeFormFieldForSave(field, index + 1),
+      ) as FormFieldDefinition[],
+      active: this.formDraft.active,
+    };
+
+    const save$ = this.taskFormDefinition?.id
+      ? this.formService.actualizarFormulario(this.taskFormDefinition.id, request)
+      : this.formService.crearFormulario(request);
+
+    save$
+      .pipe(
+        finalize(() => {
+          this.formSaving = false;
+          this.cdr.markForCheck();
+        }),
+      )
+      .subscribe({
+        next: (response: ApiResponse<FormDefinition>) => {
+          const updatedForm = response.data ?? null;
+          this.taskFormDefinition = updatedForm;
+          this.formDraft = updatedForm
+            ? {
+                ...updatedForm,
+                fields: (updatedForm.fields ?? []).map((field) => ({
+                  ...field,
+                  options: [...(field.options ?? [])],
+                  optionItems: (field.optionItems ?? []).map((option) => ({ ...option })),
+                })),
+            }
+            : this.formDraft;
+          this.formSuccess = 'Formulario guardado correctamente.';
+          this.processFormDefinitions = [];
+          this.loadedConditionProcessKey = '';
+          this.availableConditionFields = [];
+          this.loadAvailableConditionFields();
+          this.forceRefreshSelectedSequenceFlow();
+          this.cdr.markForCheck();
+        },
+        error: (error: any) => {
+          this.formError = error?.error?.message || 'No se pudo guardar el formulario.';
+          this.cdr.markForCheck();
+        },
+      });
+  }
+
+  protected onTaskFormFieldMove(event: { index: number; direction: -1 | 1 }): void {
+    this.moveField(event.index, event.direction);
+  }
+
+  private initializeModeler(): void {
+    this.modeler = new Modeler({
+      container: this.canvasHostRef.nativeElement,
+      propertiesPanel: {
+        parent: this.propertiesHostRef.nativeElement,
+      },
+      moddleExtensions: {
+        custom: customModdle,
+      },
+      additionalModules: [BpmnPropertiesPanelModule, BpmnPropertiesProviderModule, UmlActivityRendererModule],
+    });
+  }
+
+  private setupSelectionHandling(): void {
+    if (!this.modeler) {
+      return;
+    }
+
+    const eventBus = this.modeler.get('eventBus') as {
+      on: (eventName: string, callback: (event: any) => void) => void;
+    };
+
+    this.selectionChangedHandler = (event: any) => {
+      const selectedElement = event?.newSelection?.[0] ?? null;
+      this.handleSelectedElement(selectedElement);
+    };
+
+    eventBus.on('selection.changed', this.selectionChangedHandler);
+    this.commandStackChangedHandler = () => {
+      this.scheduleOverlayRefresh();
+      this.scheduleUmlCanvasRefresh();
+      this.handleLocalDiagramChange();
+    };
+    const modelerEvents = this.modeler as unknown as {
+      on?: (eventName: string, callback: () => void) => void;
+    };
+    modelerEvents.on?.('commandStack.changed', this.commandStackChangedHandler);
+  }
+
+  protected get isEffectiveReadonly(): boolean {
+    return this.readonlyMode || !this.isDraftProcess || this.isReadOnlyByCapacity;
+  }
+
+  protected get collaborationStatusLabel(): string {
+    if (!this.processId || !this.collaborationRoom) {
+      return 'Colaboracion pendiente';
+    }
+
+    if (this.isCollaborationConnected) {
+      return 'Conectado';
+    }
+
+    return 'Conectando...';
+  }
+
+  protected get liveModeLabel(): string {
+    if (!this.isDraftProcess || this.readonlyMode) {
+      return 'Modo lectura';
+    }
+
+    if (this.isReadOnlyByCapacity) {
+      return 'Modo lectura: sala llena';
+    }
+
+    return 'Editando en vivo';
+  }
+
+  protected get autosaveStatusLabel(): string {
+    switch (this.saveState) {
+      case 'dirty':
+        return 'Cambios sin guardar';
+      case 'saving':
+        return 'Guardando...';
+      case 'saved':
+        return this.lastSavedAtLabel ? `Guardado automaticamente ${this.lastSavedAtLabel}` : 'Guardado automaticamente';
+      case 'readonly':
+        return 'Solo lectura';
+      case 'offline':
+        return 'Esperando conexion';
+      case 'error':
+        return this.autosaveErrorMessage || 'No se pudo autosguardar';
+      default:
+        return 'Autosave listo';
+    }
+  }
+
+  protected manualAutosaveNow(): void {
+    void this.flushAutosave(true);
+  }
+
+  private configureCollaboration(): void {
+    if (!this.modeler || !this.processId || !this.processKey) {
+      this.refreshCollaborationMode();
+      return;
+    }
+
+    const nextRoom = this.buildCollaborationRoom();
+    if (!nextRoom) {
+      return;
+    }
+
+    if (this.collaborationRoom === nextRoom && this.provider && this.ydoc) {
+      this.refreshAwarenessState();
+      return;
+    }
+
+    this.disconnectCollaboration();
+    this.collaborationRoom = nextRoom;
+    this.ydoc = new Y.Doc();
+    this.sharedProcessMap = this.ydoc.getMap<string | number>('bpmn');
+    this.sharedMapObserver = (event: Y.YMapEvent<string | number>) => {
+      this.handleRemoteSharedXmlChange(event);
+    };
+    this.sharedProcessMap.observe(this.sharedMapObserver);
+
+    const providerUrl = this.resolveYjsServerUrl();
+    this.provider = new WebsocketProvider(providerUrl, nextRoom, this.ydoc);
+    this.provider.on('status', (event: { status: string }) => {
+      this.isCollaborationConnected = event.status === 'connected';
+      if (!this.isCollaborationConnected && this.saveState !== 'saving' && this.saveState !== 'saved') {
+        this.saveState = 'offline';
+      }
+      this.cdr.markForCheck();
+    });
+    this.provider.on('sync', (isSynced: boolean) => {
+      if (!isSynced) {
+        return;
+      }
+
+      const remoteXml = this.readSharedXml();
+      if (remoteXml) {
+        console.debug('[BPMN/Yjs] XML inicial encontrado en Yjs, importando estado colaborativo.');
+        void this.applyRemoteXml(remoteXml);
+      } else if (this.currentImportedXml) {
+        console.debug('[BPMN/Yjs] Yjs no tiene XML, sembrando XML inicial del backend.');
+        this.seedSharedXmlIfNeeded(this.currentImportedXml);
+      }
+    });
+    this.provider.awareness.on('change', () => {
+      this.updateCollaborationUsers();
+    });
+
+    this.refreshAwarenessState();
+    this.updateCollaborationUsers();
+    if (this.isEffectiveReadonly) {
+      this.saveState = 'readonly';
+    }
+    this.cdr.markForCheck();
+  }
+
+  private disconnectCollaboration(): void {
+    if (this.sharedProcessMap && this.sharedMapObserver) {
+      this.sharedProcessMap.unobserve(this.sharedMapObserver);
+    }
+
+    this.provider?.awareness.setLocalState(null);
+    this.provider?.destroy();
+    this.ydoc?.destroy();
+    this.provider = null;
+    this.ydoc = null;
+    this.sharedProcessMap = null;
+    this.sharedMapObserver = undefined;
+    this.collaborationRoom = '';
+    this.collaborationUsers = [];
+    this.isCollaborationConnected = false;
+    this.isReadOnlyByCapacity = false;
+  }
+
+  private refreshCollaborationMode(): void {
+    if (this.isEffectiveReadonly) {
+      this.saveState = 'readonly';
+    } else if (!this.isCollaborationConnected && this.processId) {
+      this.saveState = 'offline';
+    } else if (this.saveState === 'readonly' || this.saveState === 'offline') {
+      this.saveState = 'idle';
+    }
+
+    this.refreshAwarenessState();
+    this.cdr.markForCheck();
+  }
+
+  private refreshAwarenessState(): void {
+    if (!this.provider || !this.ydoc) {
+      return;
+    }
+
+    const user = this.authService.currentUser();
+    const email = user?.email ?? 'usuario@local';
+    const fullName = `${user?.nombre ?? ''} ${user?.apellido ?? ''}`.trim() || email;
+
+    this.provider.awareness.setLocalStateField('user', {
+      name: fullName,
+      email,
+      color: this.pickUserColor(this.ydoc.clientID),
+      mode: this.isEffectiveReadonly ? 'lectura' : 'editando',
+    });
+  }
+
+  private updateCollaborationUsers(): void {
+    if (!this.provider || !this.ydoc) {
+      return;
+    }
+
+    const states = Array.from(this.provider.awareness.getStates().entries()) as Array<[number, any]>;
+    const orderedStates = states
+      .filter(([, state]) => !!state?.user)
+      .sort(([leftClientId], [rightClientId]) => leftClientId - rightClientId);
+    const editableClientIds = this.isDraftProcess
+      ? orderedStates.map(([clientId]) => clientId).slice(0, 3)
+      : [];
+    const nextReadOnlyByCapacity = this.isDraftProcess && !editableClientIds.includes(this.ydoc.clientID);
+
+    if (this.isReadOnlyByCapacity !== nextReadOnlyByCapacity) {
+      this.isReadOnlyByCapacity = nextReadOnlyByCapacity;
+      this.refreshAwarenessState();
+    }
+
+    this.collaborationUsers = orderedStates.map(([clientId, state]) => {
+      const user = state.user ?? {};
+      const mode: 'editando' | 'lectura' =
+        this.isDraftProcess && editableClientIds.includes(clientId) && !this.readonlyMode
+          ? 'editando'
+          : 'lectura';
+
+      return {
+        clientId,
+        name: String(user.name || user.email || 'Usuario'),
+        email: String(user.email || 'Sin correo'),
+        color: String(user.color || this.pickUserColor(clientId)),
+        mode,
+      };
+    });
+
+    this.refreshCollaborationMode();
+  }
+
+  private handleLocalDiagramChange(): void {
+    if (this.isApplyingRemoteChange || this.isEffectiveReadonly) {
+      return;
+    }
+
+    console.debug('[BPMN/Yjs] Cambio BPMN local detectado.');
+    this.clearCollaborationSyncTimer();
+    this.collaborationSyncTimer = setTimeout(() => {
+      void this.publishLocalXmlChange();
+    }, 600);
+  }
+
+  private async publishLocalXmlChange(): Promise<void> {
+    if (!this.sharedProcessMap || !this.ydoc || this.isApplyingRemoteChange || this.isEffectiveReadonly) {
+      return;
+    }
+
+    try {
+      const xml = await this.exportToXml();
+      if (!xml || xml === this.currentImportedXml) {
+        return;
+      }
+
+      this.currentImportedXml = xml;
+      this.writeXmlToYjs(xml);
+      console.debug('[BPMN/Yjs] XML enviado a Yjs.', {
+        room: this.collaborationRoom,
+        xmlLength: xml.length,
+      });
+      this.markXmlPendingAutosave(xml);
+    } catch (error) {
+      console.error('No se pudo sincronizar el cambio BPMN local', error);
+    }
+  }
+
+  private handleRemoteSharedXmlChange(event: Y.YMapEvent<string | number>): void {
+    if (!this.sharedProcessMap || !event.keysChanged.has('xml')) {
+      return;
+    }
+
+    const remoteXml = this.readSharedXml();
+    const updatedBy = this.readSharedString('updatedBy');
+    const updatedClientId = Number(this.sharedProcessMap.get('updatedClientId') ?? -1);
+    if (!remoteXml || remoteXml === this.currentImportedXml) {
+      return;
+    }
+
+    if (this.ydoc && updatedClientId === this.ydoc.clientID) {
+      return;
+    }
+
+    console.debug('[BPMN/Yjs] Cambio BPMN remoto recibido.', {
+      updatedBy,
+      updatedClientId,
+      xmlLength: remoteXml.length,
+    });
+    void this.applyRemoteXml(remoteXml);
+  }
+
+  private async applyRemoteXml(xml: string): Promise<void> {
+    if (!this.modeler || this.isApplyingRemoteChange || !xml.trim()) {
+      return;
+    }
+
+    try {
+      this.isApplyingRemoteChange = true;
+      await this.importFromXml(xml);
+      this.currentImportedXml = xml;
+      console.debug('[BPMN/Yjs] XML remoto importado.');
+      this.markXmlPendingAutosave(xml);
+    } catch (error) {
+      console.error('No se pudo aplicar XML BPMN remoto', error);
+    } finally {
+      this.isApplyingRemoteChange = false;
+      this.cdr.markForCheck();
+    }
+  }
+
+  private seedSharedXmlIfNeeded(xml: string): void {
+    if (!this.sharedProcessMap || !xml || this.sharedProcessMap.get('xml')) {
+      return;
+    }
+
+    this.writeXmlToYjs(xml);
+    console.debug('[BPMN/Yjs] XML inicial enviado a Yjs.', {
+      room: this.collaborationRoom,
+      xmlLength: xml.length,
+    });
+  }
+
+  private writeXmlToYjs(xml: string): void {
+    if (!this.sharedProcessMap || !this.ydoc) {
+      return;
+    }
+
+    const currentUserEmail = this.getCurrentUserEmail();
+    this.ydoc.transact(() => {
+      this.sharedProcessMap?.set('xml', xml);
+      this.sharedProcessMap?.set('updatedBy', currentUserEmail);
+      this.sharedProcessMap?.set('updatedAt', new Date().toISOString());
+      this.sharedProcessMap?.set('updatedClientId', this.ydoc?.clientID ?? 0);
+    });
+  }
+
+  private readSharedXml(): string {
+    return this.readSharedString('xml');
+  }
+
+  private readSharedString(key: string): string {
+    const value = this.sharedProcessMap?.get(key);
+    return typeof value === 'string' ? value : '';
+  }
+
+  private getCurrentUserEmail(): string {
+    return this.authService.currentUser()?.email ?? 'usuario@local';
+  }
+
+  private markXmlPendingAutosave(xml: string): void {
+    if (!xml || this.isEffectiveReadonly || !this.processId || xml === this.lastSavedXml) {
+      return;
+    }
+
+    this.pendingAutosaveXml = xml;
+    this.saveState = 'dirty';
+    this.autosaveErrorMessage = '';
+    this.clearAutosaveTimer();
+    this.autosaveTimer = setTimeout(() => {
+      void this.flushAutosave(false);
+    }, this.autosaveDebounceMs);
+    this.cdr.markForCheck();
+  }
+
+  private async flushAutosave(force: boolean): Promise<void> {
+    if (this.isAutosaving || this.isEffectiveReadonly || !this.processId) {
+      return;
+    }
+
+    const xml = this.pendingAutosaveXml || (force ? await this.exportToXml() : '');
+    if (!xml || xml === this.lastSavedXml) {
+      if (force) {
+        this.saveState = 'saved';
+        this.lastSavedAtLabel = 'sin cambios nuevos';
+        this.cdr.markForCheck();
+      }
+      return;
+    }
+
+    const elapsed = Date.now() - this.lastBackendSaveAt;
+    if (!force && elapsed < this.backendSaveMinIntervalMs) {
+      this.clearAutosaveTimer();
+      this.autosaveTimer = setTimeout(() => {
+        void this.flushAutosave(false);
+      }, this.backendSaveMinIntervalMs - elapsed);
+      return;
+    }
+
+    this.isAutosaving = true;
+    this.saveState = 'saving';
+    this.clearAutosaveTimer();
+    this.cdr.markForCheck();
+
+    const user = this.authService.currentUser();
+    const lastSavedBy = user?.email ?? 'usuario@local';
+
+    this.processService
+      .autosaveProceso(this.processId, {
+        nombre: this.processName,
+        xml,
+        lastSavedBy,
+      })
+      .pipe(
+        finalize(() => {
+          this.isAutosaving = false;
+          this.cdr.markForCheck();
+        }),
+      )
+      .subscribe({
+        next: (response) => {
+          if (!response.success) {
+            this.autosaveErrorMessage = response.message || 'No se pudo autosguardar.';
+            this.saveState = 'error';
+            return;
+          }
+
+          this.lastSavedXml = xml;
+          this.pendingAutosaveXml = '';
+          this.lastBackendSaveAt = Date.now();
+          this.lastSavedAtLabel = 'ahora';
+          this.saveState = 'saved';
+        },
+        error: (error: any) => {
+          this.autosaveErrorMessage = error?.error?.message || 'No se pudo autosguardar el BPMN.';
+          this.saveState = 'error';
+        },
+      });
+  }
+
+  private buildCollaborationRoom(): string {
+    const processKey = this.normalizeProcessKey(this.processKey || this.processName);
+    const version = this.processVersion ?? 1;
+    return `bpm-process-${processKey}-v${version}`;
+  }
+
+  private resolveYjsServerUrl(): string {
+    if (environment.yjsUrl?.trim()) {
+      return environment.yjsUrl.trim();
+    }
+    const protocol = window.location.protocol === 'https:' ? 'wss' : 'ws';
+    return `${protocol}://${window.location.hostname}:1234`;
+  }
+
+  private pickUserColor(clientId: number): string {
+    const colors = ['#0f9f8f', '#2563eb', '#f97316', '#7c3aed', '#dc2626', '#0891b2'];
+    return colors[Math.abs(clientId) % colors.length];
+  }
+
+  private get isDraftProcess(): boolean {
+    return (this.processState || 'BORRADOR').toUpperCase() === 'BORRADOR';
+  }
+
+  private clearAutosaveTimer(): void {
+    if (this.autosaveTimer) {
+      clearTimeout(this.autosaveTimer);
+      this.autosaveTimer = null;
+    }
+  }
+
+  private clearCollaborationSyncTimer(): void {
+    if (this.collaborationSyncTimer) {
+      clearTimeout(this.collaborationSyncTimer);
+      this.collaborationSyncTimer = null;
+    }
+  }
+
+  private handleSelectedElement(element: any | null): void {
+    const laneElement = this.resolveLaneElement(element);
+    if (!laneElement) {
+      this.clearLaneSelection();
+    } else {
+      this.selectedLaneElement = laneElement;
+      this.syncSelectedLaneState();
+    }
+
+    const sequenceFlowElement = this.resolveExclusiveGatewaySequenceFlowElement(element);
+    if (!sequenceFlowElement) {
+      this.clearSequenceFlowSelection();
+    } else {
+      this.selectedSequenceFlowElement = sequenceFlowElement;
+      this.syncSelectedSequenceFlowState();
+    }
+
+    const userTaskElement = this.resolveUserTaskElement(element);
+    if (!userTaskElement) {
+      this.clearUserTaskSelection();
+    } else {
+      this.selectedUserTask = userTaskElement;
+      this.loadTaskDocumentConfigSummary(userTaskElement);
+      this.cdr.markForCheck();
+    }
+  }
+
+  private clearLaneSelection(): void {
+    this.selectedLaneElement = null;
+    this.selectedLaneAreaId = '';
+    this.selectedLaneAreaName = '';
+    this.laneBindingMessage = '';
+  }
+
+  private clearUserTaskSelection(): void {
+    this.selectedUserTask = null;
+    this.taskDocumentConfig = null;
+    this.documentConfigDraft = this.createEmptyDocumentConfigDraft();
+  }
+
+  private loadTaskDocumentConfigSummary(userTask: any): void {
+    const taskDefinitionKey = userTask?.businessObject?.id || userTask?.id;
+    const payloadProcessKey = this.processKey || this.normalizeProcessKey(this.processName) || 'proceso_sin_key';
+    const payloadVersion = this.processVersion ?? 1;
+    if (!taskDefinitionKey || !payloadProcessKey || !payloadVersion) {
+      this.taskDocumentConfig = null;
+      this.documentConfigDraft = this.createEmptyDocumentConfigDraft(payloadProcessKey, payloadVersion, taskDefinitionKey || '');
+      return;
+    }
+
+    this.taskDocumentConfigService.obtenerConfig(payloadProcessKey, payloadVersion, taskDefinitionKey).subscribe({
+      next: (response) => {
+        this.taskDocumentConfig = response.data ?? null;
+        this.documentConfigDraft = response.data
+          ? this.toDocumentConfigDraft(response.data)
+          : this.createEmptyDocumentConfigDraft(payloadProcessKey, payloadVersion, taskDefinitionKey, userTask.businessObject?.name || userTask.id);
+        this.cdr.markForCheck();
+      },
+      error: () => {
+        this.taskDocumentConfig = null;
+        this.documentConfigDraft = this.createEmptyDocumentConfigDraft(payloadProcessKey, payloadVersion, taskDefinitionKey, userTask.businessObject?.name || userTask.id);
+        this.cdr.markForCheck();
+      },
+    });
+  }
+
+  private clearSequenceFlowSelection(): void {
+    this.selectedSequenceFlowElement = null;
+    this.availableConditionFields = [];
+    this.conditionFieldsError = '';
+    this.conditionFieldsEmptyMessage = '';
+    this.selectedSequenceFlowFieldName = '';
+    this.selectedSequenceFlowOperator = '';
+    this.selectedSequenceFlowValue = '';
+    this.selectedSequenceFlowGeneratedExpression = '';
+    this.selectedSequenceFlowParseWarning = '';
+    this.selectedSequenceFlowValidationMessage = '';
+    this.selectedSequenceFlowDefaultDraft = false;
+    this.sequenceFlowFeedbackMessage = '';
+  }
+
+  private readLaneAreaId(element: any): string {
+    const extensionValues = element?.businessObject?.extensionElements?.values ?? [];
+    const areaRef = extensionValues.find((value: any) => value?.$type === 'custom:areaRef');
+    return areaRef?.body?.trim?.() ?? areaRef?.body ?? '';
+  }
+
+  private syncSelectedLaneState(): void {
+    if (!this.selectedLaneElement) {
+      return;
+    }
+
+    const binding = this.resolveLaneAreaBinding(this.selectedLaneElement);
+    this.selectedLaneAreaId = binding.areaId;
+    this.selectedLaneAreaName = binding.areaName;
+    this.laneBindingMessage = binding.areaId
+      ? `Lane vinculada a ${binding.areaName}.`
+      : 'Esta lane aun no tiene un area asignada.';
+    this.cdr.markForCheck();
+  }
+
+  private syncSelectedSequenceFlowState(): void {
+    if (!this.selectedSequenceFlowElement) {
+      return;
+    }
+
+    this.rebuildAvailableConditionFields();
+    const currentExpression = this.readSequenceFlowCondition(this.selectedSequenceFlowElement);
+    this.selectedSequenceFlowDefaultDraft = this.isDefaultSequenceFlow(this.selectedSequenceFlowElement);
+    this.selectedSequenceFlowGeneratedExpression = currentExpression;
+    this.selectedSequenceFlowValidationMessage = '';
+    this.hydrateSequenceFlowConditionBuilder(currentExpression);
+    this.cdr.markForCheck();
+  }
+
+  private refreshLaneAreaOverlays(): void {
+    if (!this.modeler) {
+      return;
+    }
+
+    const overlays = this.modeler.get('overlays') as {
+      add: (
+        element: any,
+        type: string,
+        config: {
+          position: { top?: number; right?: number; bottom?: number; left?: number };
+          html: HTMLElement;
+        },
+      ) => string;
+      remove: (overlayId: string) => void;
+    };
+    const elementRegistry = this.modeler.get('elementRegistry') as {
+      filter: (predicate: (element: any) => boolean) => any[];
+    };
+
+    for (const overlayId of this.laneOverlayIds.values()) {
+      overlays.remove(overlayId);
+    }
+    this.laneOverlayIds.clear();
+
+    void elementRegistry;
+  }
+
+  private scheduleOverlayRefresh(): void {
+    if (!this.modeler || this.overlayRefreshFrameId !== null) {
+      return;
+    }
+
+    this.overlayRefreshFrameId = requestAnimationFrame(() => {
+      this.overlayRefreshFrameId = null;
+      if (!this.modeler) {
+        return;
+      }
+
+      if (this.selectedLaneElement) {
+        const laneElement = this.resolveLaneElement(this.selectedLaneElement);
+        if (!laneElement) {
+          this.clearLaneSelection();
+        } else {
+          this.selectedLaneElement = laneElement;
+          this.syncSelectedLaneState();
+        }
+      }
+
+      if (this.selectedSequenceFlowElement) {
+        const sequenceFlowElement = this.resolveExclusiveGatewaySequenceFlowElement(this.selectedSequenceFlowElement);
+        if (!sequenceFlowElement) {
+          this.clearSequenceFlowSelection();
+        } else {
+          this.selectedSequenceFlowElement = sequenceFlowElement;
+          this.syncSelectedSequenceFlowState();
+        }
+      }
+
+      this.refreshLaneAreaOverlays();
+    });
+  }
+
+  private scheduleUmlCanvasRefresh(): void {
+    if (!this.modeler || this.umlCanvasRefreshFrameId !== null) {
+      return;
+    }
+
+    this.umlCanvasRefreshFrameId = requestAnimationFrame(() => {
+      this.umlCanvasRefreshFrameId = null;
+      this.applyUmlCanvasPresentation();
+    });
+  }
+
+  private applyUmlCanvasPresentation(): void {
+    if (!this.modeler) {
+      return;
+    }
+
+    const canvas = this.modeler.get('canvas') as {
+      addMarker: (id: string, marker: string) => void;
+      removeMarker: (id: string, marker: string) => void;
+    };
+    const elementRegistry = this.modeler.get('elementRegistry') as {
+      filter: (predicate: (element: any) => boolean) => any[];
+    };
+
+    const relevantElements = elementRegistry.filter((element) => !!element?.businessObject?.$type);
+    for (const element of relevantElements) {
+      const elementId = element?.id;
+      if (!elementId) {
+        continue;
+      }
+
+      for (const marker of [
+        'uml-action',
+        'uml-decision',
+        'uml-sync',
+        'uml-initial',
+        'uml-final',
+        'uml-hidden-label',
+        'uml-gateway-label',
+        'uml-flow-label',
+      ]) {
+        canvas.removeMarker(elementId, marker);
+      }
+
+      const elementType = element.businessObject.$type as string;
+      switch (elementType) {
+        case 'bpmn:UserTask': {
+          canvas.addMarker(elementId, 'uml-action');
+          break;
+        }
+        case 'bpmn:ExclusiveGateway':
+          canvas.addMarker(elementId, 'uml-decision');
+          break;
+        case 'bpmn:ParallelGateway':
+          canvas.addMarker(elementId, 'uml-sync');
+          break;
+        case 'bpmn:StartEvent':
+          canvas.addMarker(elementId, 'uml-initial');
+          break;
+        case 'bpmn:EndEvent':
+          canvas.addMarker(elementId, 'uml-final');
+          break;
+        default:
+          break;
+      }
+    }
+
+    const labelElements = elementRegistry.filter((element) => !!element?.labelTarget);
+    for (const labelElement of labelElements) {
+      const elementId = labelElement?.id;
+      if (!elementId) {
+        continue;
+      }
+
+      for (const marker of ['uml-hidden-label', 'uml-gateway-label', 'uml-flow-label']) {
+        canvas.removeMarker(elementId, marker);
+      }
+
+      const labelTargetType = labelElement.labelTarget?.businessObject?.$type as string | undefined;
+      if (!labelTargetType) {
+        continue;
+      }
+
+      if (
+        labelTargetType === 'bpmn:UserTask' ||
+        labelTargetType === 'bpmn:StartEvent' ||
+        labelTargetType === 'bpmn:EndEvent' ||
+        labelTargetType === 'bpmn:ParallelGateway'
+      ) {
+        canvas.addMarker(elementId, 'uml-hidden-label');
+        continue;
+      }
+
+      if (labelTargetType === 'bpmn:ExclusiveGateway') {
+        canvas.addMarker(elementId, 'uml-hidden-label');
+        continue;
+      }
+
+      if (labelTargetType === 'bpmn:SequenceFlow') {
+        canvas.addMarker(elementId, 'uml-flow-label');
+      }
+    }
+  }
+
+  private updateLaneAreaReference(areaId: string): void {
+    if (!this.modeler || !this.selectedLaneElement) {
+      return;
+    }
+
+    const moddle = this.modeler.get('moddle') as {
+      create: (type: string, attrs?: Record<string, unknown>) => any;
+    };
+    const modeling = this.modeler.get('modeling') as {
+      updateProperties: (element: any, properties: Record<string, unknown>) => void;
+      updateLabel?: (element: any, text: string) => void;
+    };
+
+    const selectedArea = areaId ? this.activeAreas.find((area) => area.id === areaId) ?? null : null;
+    const selectedAreaName = selectedArea?.nombre ?? (areaId ? 'Area no encontrada' : '');
+
+    this.persistLaneAreaBinding(this.selectedLaneElement, areaId, selectedAreaName, moddle, modeling);
+
+    if (areaId && selectedAreaName && selectedAreaName !== 'Area no encontrada') {
+      modeling.updateLabel?.(this.selectedLaneElement, selectedAreaName);
+    }
+
+    this.selectedLaneAreaName = selectedAreaName;
+    this.laneBindingMessage = areaId
+      ? `Area "${this.selectedLaneAreaName}" asignada correctamente a la lane.`
+      : 'Se limpio la asignacion de area de la lane.';
+    this.syncSelectedLaneState();
+    this.refreshLaneAreaOverlays();
+  }
+
+  private loadActiveAreas(): void {
+    this.isAreasLoading = true;
+    this.areasError = '';
+
+    this.areaService.listarAreasActivas().subscribe({
+      next: (response) => {
+        this.activeAreas = response.data ?? [];
+        this.isAreasLoading = false;
+        this.restoreLaneAreaBindings();
+        this.syncSelectedLaneState();
+        this.refreshLaneAreaOverlays();
+      },
+      error: (error: any) => {
+        this.isAreasLoading = false;
+        this.areasError = error?.error?.message || 'No se pudieron cargar las areas activas.';
+      },
+    });
+  }
+
+  private loadAvailableConditionFields(): void {
+    const normalizedProcessKey = this.normalizeProcessKey(this.processKey || this.processName);
+    if (!normalizedProcessKey || normalizedProcessKey === 'proceso_sin_nombre') {
+      this.processFormDefinitions = [];
+      this.loadedConditionProcessKey = '';
+      this.availableConditionFields = [];
+      this.conditionFieldsEmptyMessage = '';
+      this.conditionFieldsError = '';
+      this.conditionFieldsLoading = false;
+      return;
+    }
+
+    if (this.loadedConditionProcessKey === normalizedProcessKey) {
+      this.rebuildAvailableConditionFields();
+      return;
+    }
+
+    this.conditionFieldsLoading = true;
+    this.conditionFieldsError = '';
+    this.conditionFieldsEmptyMessage = '';
+    this.cdr.markForCheck();
+
+    this.formService.listarPorProceso(normalizedProcessKey).subscribe({
+      next: (response) => {
+        this.processFormDefinitions = response.data ?? [];
+        this.loadedConditionProcessKey = normalizedProcessKey;
+        this.conditionFieldsLoading = false;
+        this.rebuildAvailableConditionFields();
+        this.cdr.markForCheck();
+      },
+      error: (error: any) => {
+        this.conditionFieldsLoading = false;
+        this.conditionFieldsError =
+          error?.error?.message || 'No se pudieron cargar los campos de formularios del proceso.';
+        this.conditionFieldsEmptyMessage = '';
+        this.processFormDefinitions = [];
+        this.loadedConditionProcessKey = '';
+        this.availableConditionFields = [];
+        this.cdr.markForCheck();
+      },
+    });
+  }
+
+  private rebuildAvailableConditionFields(): void {
+    if (!this.selectedSequenceFlowElement) {
+      this.availableConditionFields = [];
+      this.conditionFieldsEmptyMessage = '';
+      return;
+    }
+
+    this.availableConditionFields = [];
+    const sourceGateway = this.selectedSequenceFlowElement.businessObject?.sourceRef;
+    const taskDefinitionKeys = this.collectReachablePreviousUserTaskKeys(sourceGateway);
+    const fieldMap = new Map<string, ConditionFieldOption>();
+    const allFields: FormFieldDefinition[] = [];
+    const latestVersion = Math.max(...this.processFormDefinitions.map((form) => form.processVersion || 0));
+    const latestForms = this.processFormDefinitions.filter((form) => (form.processVersion || 0) === latestVersion);
+
+    console.log('USANDO VERSION:', latestVersion);
+    console.log('FORMS FILTRADOS:', latestForms);
+
+    const fields = latestForms.flatMap((form) => form.fields ?? []);
+    console.log('ANTES DE PROCESAR FIELDS:', fields);
+
+    for (const field of fields) {
+      console.log('FIELD RAW:', field.name, field.type, field.options);
+      if (field.type === 'select') {
+        console.log('SELECT OPTIONS:', field.name, field.options, field.optionItems);
+      }
+    }
+
+    for (const definition of latestForms) {
+      const taskDefinitionKey = definition.taskDefinitionKey?.trim();
+      if (!taskDefinitionKey || !taskDefinitionKeys.has(taskDefinitionKey)) {
+        continue;
+      }
+
+      allFields.push(...(definition.fields ?? []));
+      for (const field of definition.fields ?? []) {
+        const fieldName = field.name?.trim();
+        if (!fieldName || fieldMap.has(fieldName)) {
+          continue;
+        }
+
+        const optionItems = this.normalizeFieldOptionItems(field);
+        fieldMap.set(fieldName, {
+          name: fieldName,
+          label: field.label?.trim() || fieldName,
+          type: field.type,
+          options: optionItems.map((option) => option.value),
+          optionItems,
+          normalizedOptions: optionItems,
+        });
+      }
+    }
+
+    this.availableConditionFields = Array.from(fieldMap.values()).sort((left, right) =>
+      left.label.localeCompare(right.label),
+    );
+    console.log('AVAILABLE FIELDS FINAL:', this.availableConditionFields);
+    this.conditionFieldsError = '';
+    this.conditionFieldsEmptyMessage = this.availableConditionFields.length
+      ? ''
+      : 'No hay variables disponibles antes de este gateway.';
+
+    if (
+      this.selectedSequenceFlowFieldName &&
+      !this.availableConditionFields.some((field) => field.name === this.selectedSequenceFlowFieldName)
+    ) {
+      this.selectedSequenceFlowFieldName = '';
+      this.selectedSequenceFlowOperator = '';
+      this.selectedSequenceFlowValue = '';
+      if (this.selectedSequenceFlowGeneratedExpression.trim()) {
+        this.selectedSequenceFlowParseWarning =
+          'La condicion actual usa una variable que no esta disponible antes de este gateway.';
+      }
+    }
+  }
+
+  private forceRefreshSelectedSequenceFlow(): void {
+    if (!this.selectedSequenceFlowElement) {
+      this.cdr.markForCheck();
+      return;
+    }
+
+    const currentFlow = this.selectedSequenceFlowElement;
+    this.sequenceFlowRefreshSnapshot = currentFlow;
+
+    setTimeout(() => {
+      this.selectedSequenceFlowElement = this.sequenceFlowRefreshSnapshot;
+      this.sequenceFlowRefreshSnapshot = null;
+      this.rebuildAvailableConditionFields();
+      this.syncSelectedSequenceFlowState();
+      this.cdr.markForCheck();
+    });
+  }
+
+  private collectReachablePreviousUserTaskKeys(startNode: any): Set<string> {
+    const taskKeys = new Set<string>();
+    const visitedNodeIds = new Set<string>();
+    const nodesToVisit = startNode ? [startNode] : [];
+
+    while (nodesToVisit.length) {
+      const currentNode = nodesToVisit.pop();
+      const currentNodeId = currentNode?.id;
+      if (!currentNodeId || visitedNodeIds.has(currentNodeId)) {
+        continue;
+      }
+
+      visitedNodeIds.add(currentNodeId);
+      const incomingFlows = currentNode?.incoming ?? [];
+      for (const incomingFlow of incomingFlows) {
+        const previousNode = incomingFlow?.sourceRef;
+        const previousNodeId = previousNode?.id;
+        if (!previousNodeId) {
+          continue;
+        }
+
+        if (previousNode?.$type === 'bpmn:UserTask') {
+          taskKeys.add(previousNodeId);
+        }
+
+        if (!visitedNodeIds.has(previousNodeId)) {
+          nodesToVisit.push(previousNode);
+        }
+      }
+    }
+
+    return taskKeys;
+  }
+
+  private setupResizeHandling(): void {
+    this.resizeObserver = new ResizeObserver(() => {
+      this.scheduleFitViewport();
+    });
+
+    this.resizeObserver.observe(this.canvasHostRef.nativeElement);
+  }
+
+  private fitViewport(): void {
+    if (!this.modeler) {
+      return;
+    }
+
+    const hostElement = this.canvasHostRef.nativeElement;
+    const width = hostElement.clientWidth;
+    const height = hostElement.clientHeight;
+
+    if (!Number.isFinite(width) || !Number.isFinite(height) || width <= 0 || height <= 0) {
+      return;
+    }
+
+    const canvas = this.modeler.get('canvas') as {
+      zoom: (scale: 'fit-viewport' | number) => number;
+      resized: () => void;
+    };
+
+    canvas.resized();
+    canvas.zoom('fit-viewport');
+  }
+
+  private scheduleFitViewport(): void {
+    requestAnimationFrame(() => {
+      this.fitViewport();
+    });
+  }
+
+  private stepZoom(delta: number): void {
+    if (!this.modeler) {
+      return;
+    }
+
+    const canvas = this.modeler.get('canvas') as {
+      zoom: (scale?: 'fit-viewport' | number) => number;
+    };
+
+    const currentZoom = canvas.zoom();
+    const nextZoom = Math.max(0.2, Math.min(4, currentZoom + delta));
+    canvas.zoom(nextZoom);
+  }
+
+  private getLaneElements(): any[] {
+    if (!this.modeler) {
+      return [];
+    }
+
+    const elementRegistry = this.modeler.get('elementRegistry') as {
+      filter: (predicate: (element: any) => boolean) => any[];
+    };
+
+    return elementRegistry.filter((element) => element?.businessObject?.$type === 'bpmn:Lane');
+  }
+
+  private resolveLaneElement(element: any | null): any | null {
+    if (!element) {
+      return null;
+    }
+
+    if (element?.businessObject?.$type === 'bpmn:Lane' || element?.type === 'bpmn:Lane') {
+      return element;
+    }
+
+    if (!this.modeler || !element?.id) {
+      return null;
+    }
+
+    const elementRegistry = this.modeler.get('elementRegistry') as {
+      get: (id: string) => any;
+    };
+    const registryElement = elementRegistry.get(element.id);
+
+    return registryElement?.businessObject?.$type === 'bpmn:Lane' || registryElement?.type === 'bpmn:Lane'
+      ? registryElement
+      : null;
+  }
+
+  private resolveUserTaskElement(element: any | null): any | null {
+    if (!element) {
+      return null;
+    }
+
+    if (element?.businessObject?.$type === 'bpmn:UserTask' || element?.type === 'bpmn:UserTask') {
+      return element;
+    }
+
+    if (!this.modeler || !element?.id) {
+      return null;
+    }
+
+    const elementRegistry = this.modeler.get('elementRegistry') as {
+      get: (id: string) => any;
+    };
+    const registryElement = elementRegistry.get(element.id);
+
+    return registryElement?.businessObject?.$type === 'bpmn:UserTask' || registryElement?.type === 'bpmn:UserTask'
+      ? registryElement
+      : null;
+  }
+
+  private resolveExclusiveGatewaySequenceFlowElement(element: any | null): any | null {
+    const sequenceFlow = this.resolveSequenceFlowElement(element);
+    return sequenceFlow?.businessObject?.sourceRef?.$type === 'bpmn:ExclusiveGateway' ? sequenceFlow : null;
+  }
+
+  private resolveSequenceFlowElement(element: any | null): any | null {
+    if (!element) {
+      return null;
+    }
+
+    if (element?.businessObject?.$type === 'bpmn:SequenceFlow' || element?.type === 'bpmn:SequenceFlow') {
+      return element;
+    }
+
+    if (!this.modeler || !element?.id) {
+      return null;
+    }
+
+    const elementRegistry = this.modeler.get('elementRegistry') as {
+      get: (id: string) => any;
+    };
+    const registryElement = elementRegistry.get(element.id);
+
+    return registryElement?.businessObject?.$type === 'bpmn:SequenceFlow' || registryElement?.type === 'bpmn:SequenceFlow'
+      ? registryElement
+      : null;
+  }
+
+  private closeContextPad(): void {
+    if (!this.modeler) {
+      return;
+    }
+
+    const contextPad = this.modeler.get('contextPad') as {
+      close?: () => void;
+    };
+
+    contextPad.close?.();
+  }
+
+  private getSelectedConditionField(): ConditionFieldOption | null {
+    return this.availableConditionFields.find((field) => field.name === this.selectedSequenceFlowFieldName) ?? null;
+  }
+
+  private readSequenceFlowCondition(element: any): string {
+    return element?.businessObject?.conditionExpression?.body ?? '';
+  }
+
+  private isDefaultSequenceFlow(element: any): boolean {
+    return element?.businessObject?.sourceRef?.default === element?.businessObject;
+  }
+
+  private updateSequenceFlowCondition(rawCondition: string): void {
+    if (!this.modeler || !this.selectedSequenceFlowElement) {
+      return;
+    }
+
+    const trimmedCondition = (rawCondition ?? '').trim();
+    const moddle = this.modeler.get('moddle') as {
+      create: (type: string, attrs?: Record<string, unknown>) => any;
+    };
+    const modeling = this.modeler.get('modeling') as {
+      updateProperties: (element: any, properties: Record<string, unknown>) => void;
+    };
+
+    modeling.updateProperties(this.selectedSequenceFlowElement, {
+      conditionExpression: trimmedCondition
+        ? moddle.create('bpmn:FormalExpression', { body: trimmedCondition })
+        : undefined,
+    });
+  }
+
+  private updateSequenceFlowDefault(markAsDefault: boolean): void {
+    if (!this.modeler || !this.selectedSequenceFlowElement?.source) {
+      return;
+    }
+
+    const modeling = this.modeler.get('modeling') as {
+      updateProperties: (element: any, properties: Record<string, unknown>) => void;
+    };
+
+    modeling.updateProperties(this.selectedSequenceFlowElement.source, {
+      default: markAsDefault ? this.selectedSequenceFlowElement.businessObject : undefined,
+    });
+  }
+
+  private hydrateSequenceFlowConditionBuilder(expression: string): void {
+    this.selectedSequenceFlowFieldName = '';
+    this.selectedSequenceFlowOperator = '';
+    this.selectedSequenceFlowValue = '';
+    this.selectedSequenceFlowParseWarning = '';
+
+    if (this.selectedSequenceFlowDefaultDraft) {
+      this.selectedSequenceFlowGeneratedExpression = '';
+      return;
+    }
+
+    const parsed = this.parseVisualCondition(expression);
+    if (!parsed) {
+      this.selectedSequenceFlowGeneratedExpression = expression;
+      if (expression.trim()) {
+        this.selectedSequenceFlowParseWarning =
+          'La condicion actual no pudo convertirse automaticamente al constructor visual. Si guardas desde aqui, se reemplazara por una nueva regla.';
+      }
+      return;
+    }
+
+    this.selectedSequenceFlowFieldName = parsed.fieldName;
+    this.selectedSequenceFlowOperator = parsed.operator;
+    this.selectedSequenceFlowValue = this.normalizeSequenceFlowValue(parsed.value);
+    this.refreshGeneratedExpressionPreview();
+  }
+
+  private parseVisualCondition(expression: string): { fieldName: string; operator: ConditionOperator; value: string } | null {
+    const normalized = expression.trim();
+    if (!normalized) {
+      return null;
+    }
+
+    const fileExistsMatch = normalized.match(/^\$\{\s*([a-zA-Z_][\w]*)\s*!=\s*null\s*\}$/);
+    if (fileExistsMatch) {
+      return { fieldName: fileExistsMatch[1], operator: 'exists', value: '' };
+    }
+
+    const fileNotExistsMatch = normalized.match(/^\$\{\s*([a-zA-Z_][\w]*)\s*==\s*null\s*\}$/);
+    if (fileNotExistsMatch) {
+      return { fieldName: fileNotExistsMatch[1], operator: 'not_exists', value: '' };
+    }
+
+    const booleanTrueMatch = normalized.match(/^\$\{\s*([a-zA-Z_][\w]*)\s*==\s*true\s*\}$/i);
+    if (booleanTrueMatch) {
+      return { fieldName: booleanTrueMatch[1], operator: 'is_true', value: '' };
+    }
+
+    const booleanFalseMatch = normalized.match(/^\$\{\s*([a-zA-Z_][\w]*)\s*==\s*false\s*\}$/i);
+    if (booleanFalseMatch) {
+      return { fieldName: booleanFalseMatch[1], operator: 'is_false', value: '' };
+    }
+
+    const containsMatch = normalized.match(/^\$\{\s*([a-zA-Z_][\w]*)\s*!=\s*null\s*&&\s*\1\.contains\((.+)\)\s*\}$/);
+    if (containsMatch) {
+      return {
+        fieldName: containsMatch[1],
+        operator: 'contains',
+        value: this.unquoteBpmnLiteral(containsMatch[2]),
+      };
+    }
+
+    const notContainsMatch = normalized.match(/^\$\{\s*([a-zA-Z_][\w]*)\s*==\s*null\s*\|\|\s*!\1\.contains\((.+)\)\s*\}$/);
+    if (notContainsMatch) {
+      return {
+        fieldName: notContainsMatch[1],
+        operator: 'not_contains',
+        value: this.unquoteBpmnLiteral(notContainsMatch[2]),
+      };
+    }
+
+    const simpleMatch = normalized.match(/^\$\{\s*([a-zA-Z_][\w]*)\s*(==|!=|>=|<=|>|<)\s*(.+)\s*\}$/);
+    if (!simpleMatch) {
+      return null;
+    }
+
+    return {
+      fieldName: simpleMatch[1],
+      operator: this.mapSymbolToOperator(simpleMatch[2], simpleMatch[3]),
+      value: this.unquoteBpmnLiteral(simpleMatch[3]),
+    };
+  }
+
+  private mapSymbolToOperator(symbol: string, rawValue: string): ConditionOperator {
+    switch (symbol) {
+      case '==':
+        return 'equals';
+      case '!=':
+        return 'not_equals';
+      case '>=':
+        return 'greater_or_equal';
+      case '<=':
+        return 'less_or_equal';
+      case '>':
+        return this.looksLikeDateLiteral(rawValue) ? 'after' : 'greater_than';
+      case '<':
+        return this.looksLikeDateLiteral(rawValue) ? 'before' : 'less_than';
+      default:
+        return 'equals';
+    }
+  }
+
+  private looksLikeDateLiteral(rawValue: string): boolean {
+    return /^\d{4}-\d{2}-\d{2}$/.test(this.unquoteBpmnLiteral(rawValue));
+  }
+
+  private unquoteBpmnLiteral(rawValue: string): string {
+    const trimmed = rawValue.trim();
+    if ((trimmed.startsWith('"') && trimmed.endsWith('"')) || (trimmed.startsWith('\'') && trimmed.endsWith('\''))) {
+      return trimmed.slice(1, -1);
+    }
+    return trimmed;
+  }
+
+  private normalizeSequenceFlowValue(value: unknown): string {
+    if (typeof value === 'string') {
+      return value;
+    }
+    if (typeof value === 'number' || typeof value === 'boolean') {
+      return String(value);
+    }
+    if (value == null) {
+      return '';
+    }
+    return String(value);
+  }
+
+  private validateSequenceFlowBuilder(): string {
+    if (this.selectedSequenceFlowDefaultDraft) {
+      return '';
+    }
+
+    const normalizedSequenceFlowValue = this.normalizeSequenceFlowValue(this.selectedSequenceFlowValue);
+    this.selectedSequenceFlowValue = normalizedSequenceFlowValue;
+
+    const selectedField = this.getSelectedConditionField();
+    if (!selectedField) {
+      return 'Debes seleccionar un campo del formulario.';
+    }
+
+    if (!this.selectedSequenceFlowOperator) {
+      return 'Debes seleccionar un operador.';
+    }
+
+    const validOperator = this.getOperatorOptionsForField(selectedField)
+      .map((option) => option.value)
+      .includes(this.selectedSequenceFlowOperator);
+    if (!validOperator) {
+      return 'El operador seleccionado no es compatible con el tipo de campo.';
+    }
+
+    if (this.operatorRequiresValue(this.selectedSequenceFlowOperator) && !normalizedSequenceFlowValue.trim()) {
+      return 'Debes ingresar un valor para completar la condicion.';
+    }
+
+    if (selectedField.type === 'number' && this.operatorRequiresValue(this.selectedSequenceFlowOperator)) {
+      if (!Number.isFinite(Number(normalizedSequenceFlowValue))) {
+        return 'El valor debe ser numerico para este campo.';
+      }
+    }
+
+    if (selectedField.type === 'select' && this.operatorRequiresValue(this.selectedSequenceFlowOperator)) {
+      if (!this.normalizeSelectOptions(selectedField).some((option) => option.value === normalizedSequenceFlowValue)) {
+        return 'Debes elegir una opcion valida para este campo.';
+      }
+    }
+
+    return '';
+  }
+
+  private refreshGeneratedExpressionPreview(): void {
+    if (this.selectedSequenceFlowDefaultDraft) {
+      this.selectedSequenceFlowGeneratedExpression = '';
+      return;
+    }
+
+    const normalizedSequenceFlowValue = this.normalizeSequenceFlowValue(this.selectedSequenceFlowValue);
+    this.selectedSequenceFlowValue = normalizedSequenceFlowValue;
+
+    const selectedField = this.getSelectedConditionField();
+    if (!selectedField || !this.selectedSequenceFlowOperator) {
+      this.selectedSequenceFlowGeneratedExpression = '';
+      return;
+    }
+
+    if (this.operatorRequiresValue(this.selectedSequenceFlowOperator) && !normalizedSequenceFlowValue.trim()) {
+      this.selectedSequenceFlowGeneratedExpression = '';
+      return;
+    }
+
+    this.selectedSequenceFlowGeneratedExpression = this.buildBpmnConditionExpression(
+      selectedField,
+      this.selectedSequenceFlowOperator,
+      normalizedSequenceFlowValue,
+    );
+  }
+
+  private buildBpmnConditionExpression(
+    field: ConditionFieldOption,
+    operator: ConditionOperator,
+    rawValue: string,
+  ): string {
+    const fieldReference = field.name;
+    const normalizedValue = this.formatBpmnLiteral(field, rawValue);
+
+    switch (operator) {
+      case 'equals':
+        return `\${${fieldReference} == ${normalizedValue}}`;
+      case 'not_equals':
+        return `\${${fieldReference} != ${normalizedValue}}`;
+      case 'contains':
+        return `\${${fieldReference} != null && ${fieldReference}.contains(${normalizedValue})}`;
+      case 'not_contains':
+        return `\${${fieldReference} == null || !${fieldReference}.contains(${normalizedValue})}`;
+      case 'greater_than':
+        return `\${${fieldReference} > ${normalizedValue}}`;
+      case 'less_than':
+        return `\${${fieldReference} < ${normalizedValue}}`;
+      case 'greater_or_equal':
+        return `\${${fieldReference} >= ${normalizedValue}}`;
+      case 'less_or_equal':
+        return `\${${fieldReference} <= ${normalizedValue}}`;
+      case 'before':
+        return `\${${fieldReference} < ${normalizedValue}}`;
+      case 'after':
+        return `\${${fieldReference} > ${normalizedValue}}`;
+      case 'exists':
+        return `\${${fieldReference} != null}`;
+      case 'not_exists':
+        return `\${${fieldReference} == null}`;
+      case 'is_true':
+        return `\${${fieldReference} == true}`;
+      case 'is_false':
+        return `\${${fieldReference} == false}`;
+      default:
+        return '';
+    }
+  }
+
+  private formatBpmnLiteral(field: ConditionFieldOption, rawValue: string): string {
+    const trimmedValue = rawValue.trim();
+    if (field.type === 'number') {
+      return String(Number(trimmedValue));
+    }
+
+    if (/^(true|false)$/i.test(trimmedValue)) {
+      return trimmedValue.toLowerCase();
+    }
+
+    return `"${trimmedValue.replace(/\\/g, '\\\\').replace(/"/g, '\\"')}"`;
+  }
+
+  private normalizeSelectOptions(field: ConditionFieldOption | null): Array<{ label: string; value: string }> {
+    if (!field) {
+      return [];
+    }
+
+    if (field.normalizedOptions?.length) {
+      return field.normalizedOptions;
+    }
+
+    const rawOptions = this.readRawSelectOptions(field);
+    return rawOptions
+      .map((option) => this.normalizeSelectOptionEntry(option))
+      .filter((option): option is { label: string; value: string } => !!option);
+  }
+
+  private getConditionFieldOptions(field: ConditionFieldOption | null): Array<{ label: string; value: string }> {
+    return this.normalizeSelectOptions(field);
+  }
+
+  private readRawSelectOptions(field: ConditionFieldOption): unknown[] {
+    const candidates = [
+      (field as unknown as { optionItems?: unknown }).optionItems,
+      (field as unknown as { options?: unknown }).options,
+      (field as unknown as { values?: unknown }).values,
+    ];
+
+    for (const candidate of candidates) {
+      if (Array.isArray(candidate)) {
+        return candidate;
+      }
+      if (typeof candidate === 'string' && candidate.trim()) {
+        return candidate.split(',').map((value) => value.trim()).filter((value) => !!value);
+      }
+    }
+
+    return [];
+  }
+
+  private normalizeSelectOptionEntry(option: unknown): { label: string; value: string } | null {
+    if (typeof option === 'string') {
+      const trimmed = option.trim();
+      if (!trimmed) {
+        return null;
+      }
+
+      const splitMatch = trimmed.match(/^(.+?)\s*[=:|]\s*(.+)$/);
+      if (splitMatch) {
+        const label = splitMatch[1].trim();
+        const value = splitMatch[2].trim();
+        return { label: label || value, value: value || label };
+      }
+
+      return { label: trimmed, value: trimmed };
+    }
+
+    if (!option || typeof option !== 'object') {
+      return null;
+    }
+
+    const candidate = option as Record<string, unknown>;
+    const label = this.readStringCandidate(candidate['label']) || this.readStringCandidate(candidate['name']) || this.readStringCandidate(candidate['text']);
+    const value =
+      this.readStringCandidate(candidate['value']) ||
+      this.readStringCandidate(candidate['id']) ||
+      this.readStringCandidate(candidate['key']) ||
+      label;
+
+    if (!label && !value) {
+      return null;
+    }
+
+    return {
+      label: label || value,
+      value: value || label,
+    };
+  }
+
+  private readStringCandidate(value: unknown): string {
+    return typeof value === 'string' ? value.trim() : '';
+  }
+
+  private getOperatorOptionsForField(field: ConditionFieldOption | null): Array<{ value: ConditionOperator }> {
+    if (!field) {
+      return [];
+    }
+
+    switch (field.type) {
+      case 'text':
+      case 'textarea':
+        return [
+          { value: 'equals' },
+          { value: 'not_equals' },
+          { value: 'contains' },
+          { value: 'not_contains' },
+          { value: 'exists' },
+          { value: 'not_exists' },
+        ];
+      case 'number':
+        return [
+          { value: 'equals' },
+          { value: 'not_equals' },
+          { value: 'greater_than' },
+          { value: 'less_than' },
+          { value: 'greater_or_equal' },
+          { value: 'less_or_equal' },
+        ];
+      case 'date':
+        return [
+          { value: 'equals' },
+          { value: 'before' },
+          { value: 'after' },
+        ];
+      case 'select':
+        return [
+          { value: 'equals' },
+          { value: 'not_equals' },
+        ];
+      case 'checkbox':
+        return [
+          { value: 'is_true' },
+          { value: 'is_false' },
+        ];
+      case 'checklist':
+        return [
+          { value: 'exists' },
+          { value: 'not_exists' },
+        ];
+      case 'file':
+        return [
+          { value: 'exists' },
+          { value: 'not_exists' },
+        ];
+      default:
+        return [];
+    }
+  }
+
+  private operatorRequiresValue(operator: ConditionOperator | ''): boolean {
+    return (
+      operator !== '' &&
+      operator !== 'exists' &&
+      operator !== 'not_exists' &&
+      operator !== 'is_true' &&
+      operator !== 'is_false'
+    );
+  }
+
+  private reorderFormFields(): void {
+    this.formDraft.fields = (this.formDraft.fields ?? []).map((field, index) => ({
+      ...field,
+      order: index + 1,
+    }));
+  }
+
+  private createEmptyDocumentConfigDraft(
+    processKey = '',
+    processVersion = 0,
+    taskDefinitionKey = '',
+    taskLabel = ''
+  ): TaskDocumentConfigCreateRequest {
+    return {
+      processKey,
+      processVersion,
+      taskDefinitionKey,
+      documentRequirements: [],
+      documentName: taskLabel ? `${taskLabel} documento` : '',
+      description: '',
+      documentDirection: 'INPUT',
+      required: false,
+      allowMultipleFiles: false,
+      allowUpload: true,
+      editable: false,
+      allowEditing: false,
+      collaborativeEditing: false,
+      allowVersioning: true,
+      allowedMimeTypes: [],
+      maxFiles: 1,
+      readOnlyAfterComplete: false,
+      requireApproval: false,
+      permissions: {
+        canView: true,
+        canUpload: true,
+        canEdit: false,
+        canDelete: false,
+        canApprove: false,
+        canDownload: true,
+        canReject: false,
+        canLock: false,
+      },
+      ownerAreaId: '',
+      allowedAreaIds: [],
+      accessRules: [],
+      shareWithNextArea: false,
+      autoGenerateOnTaskStart: false,
+    };
+  }
+
+  private toDocumentConfigDraft(config: TaskDocumentConfig): TaskDocumentConfigCreateRequest {
+    return {
+      processKey: config.processKey,
+      processVersion: config.processVersion,
+      taskDefinitionKey: config.taskDefinitionKey,
+      documentRequirements: this.resolveDocumentRequirements(config),
+      documentName: config.documentName || '',
+      description: config.description || '',
+      documentDirection: config.documentDirection || 'INPUT',
+      required: !!config.required,
+      allowMultipleFiles: !!config.allowMultipleFiles,
+      allowUpload: config.allowUpload !== false,
+      editable: !!config.editable,
+      allowEditing: !!config.allowEditing,
+      collaborativeEditing: !!config.collaborativeEditing,
+      allowVersioning: config.allowVersioning !== false,
+      allowedMimeTypes: config.allowedMimeTypes ?? [],
+      maxFileSizeBytes: config.maxFileSizeBytes,
+      maxFiles: config.maxFiles ?? 1,
+      readOnlyAfterComplete: !!config.readOnlyAfterComplete,
+      requireApproval: !!config.requireApproval,
+      templateDocumentId: config.templateDocumentId,
+      permissions: config.permissions ?? {
+        canView: true,
+        canUpload: true,
+        canDownload: true,
+      },
+      ownerAreaId: config.ownerAreaId || '',
+      allowedAreaIds: config.allowedAreaIds ?? [],
+      accessRules: config.accessRules ?? [],
+      shareWithNextArea: !!config.shareWithNextArea,
+      autoGenerateOnTaskStart: !!config.autoGenerateOnTaskStart,
+    };
+  }
+
+  private resolveDocumentRequirements(config: TaskDocumentConfig): DocumentRequirement[] {
+    if (config.documentRequirements?.length) {
+      return config.documentRequirements.map((requirement) => ({
+        ...requirement,
+        id: requirement.id || this.createDocumentRequirementId(),
+        documentDirection: requirement.documentDirection || 'INPUT',
+        documentLifecyclePolicy: requirement.documentLifecyclePolicy || this.defaultDocumentLifecyclePolicy(requirement.documentDirection),
+        accessRules: requirement.accessRules ?? [],
+        allowedAreaIds: requirement.allowedAreaIds ?? [],
+      }));
+    }
+    if (
+      config.documentName ||
+      config.description ||
+      config.required ||
+      config.editable ||
+      config.requireApproval ||
+      config.allowedMimeTypes?.length ||
+      config.accessRules?.length
+    ) {
+      return [{
+        id: 'legacy-main-document',
+        name: config.documentName || 'Documento principal',
+        description: config.description || '',
+        documentDirection: config.documentDirection || 'INPUT',
+        required: !!config.required,
+        allowUpload: config.allowUpload !== false,
+        allowMultipleFiles: !!config.allowMultipleFiles,
+        editable: !!config.editable,
+        collaborativeEditing: !!config.collaborativeEditing,
+        requireApproval: !!config.requireApproval,
+        readOnlyAfterComplete: !!config.readOnlyAfterComplete,
+        allowedMimeTypes: config.allowedMimeTypes ?? [],
+        maxFileSizeBytes: config.maxFileSizeBytes,
+        maxFiles: config.maxFiles ?? 1,
+        ownerAreaId: config.ownerAreaId || '',
+        allowedAreaIds: config.allowedAreaIds ?? [],
+        accessRules: config.accessRules ?? [],
+        documentLifecyclePolicy: this.defaultDocumentLifecyclePolicy(config.documentDirection),
+      }];
+    }
+    return [];
+  }
+
+  private createDocumentRequirementId(): string {
+    return `doc-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
+  }
+
+  private defaultDocumentLifecyclePolicy(direction?: string): string {
+    return direction === 'OUTPUT' ? 'AVAILABLE_FOR_NEXT_TASKS' : 'TASK_ONLY';
+  }
+
+  private restoreLaneAreaBindings(): void {
+    if (!this.modeler || this.isAreasLoading) {
+      return;
+    }
+
+    const modeling = this.modeler.get('modeling') as {
+      updateProperties: (element: any, properties: Record<string, unknown>) => void;
+      updateLabel?: (element: any, text: string) => void;
+    };
+    const moddle = this.modeler.get('moddle') as {
+      create: (type: string, attrs?: Record<string, unknown>) => any;
+    };
+
+    for (const laneElement of this.getLaneElements()) {
+      const binding = this.resolveLaneAreaBinding(laneElement);
+      if (!binding.areaId) {
+        continue;
+      }
+
+      if (binding.matchedByName || this.readLaneAreaId(laneElement) !== binding.areaId) {
+        this.persistLaneAreaBinding(laneElement, binding.areaId, binding.areaName, moddle, modeling);
+      }
+
+      if (!binding.areaName || laneElement?.businessObject?.name === binding.areaName) {
+        continue;
+      }
+
+      modeling.updateProperties(laneElement, { name: binding.areaName });
+      modeling.updateLabel?.(laneElement, binding.areaName);
+    }
+  }
+
+  private resolveLaneAreaBinding(element: any): LaneAreaBinding {
+    const areaIdFromExtension = this.readLaneAreaId(element);
+    const areaFromExtension = areaIdFromExtension
+      ? this.activeAreas.find((area) => area.id === areaIdFromExtension) ?? null
+      : null;
+
+    if (areaFromExtension) {
+      return {
+        areaId: areaFromExtension.id,
+        areaName: areaFromExtension.nombre,
+        matchedByName: false,
+      };
+    }
+
+    const laneName = this.normalizeText(element?.businessObject?.name ?? '');
+    if (!laneName) {
+      return {
+        areaId: '',
+        areaName: '',
+        matchedByName: false,
+      };
+    }
+
+    const matchedArea = this.activeAreas.find((area) => this.normalizeText(area.nombre) === laneName) ?? null;
+    if (!matchedArea) {
+      return {
+        areaId: areaIdFromExtension,
+        areaName: areaIdFromExtension ? 'Area no encontrada' : '',
+        matchedByName: false,
+      };
+    }
+
+    return {
+      areaId: matchedArea.id,
+      areaName: matchedArea.nombre,
+      matchedByName: true,
+    };
+  }
+
+  private normalizeText(value: string): string {
+    return value.trim().toLowerCase().replace(/\s+/g, ' ');
+  }
+
+  private validateFormDraftFields(): string {
+    const duplicatedNames = new Set<string>();
+
+    for (const field of this.formDraft.fields ?? []) {
+      const trimmedName = field.name?.trim() || '';
+      if (!trimmedName) {
+        return 'Cada campo debe tener una variable Camunda.';
+      }
+
+      if (!/^[a-z][a-zA-Z0-9_]*$/.test(trimmedName)) {
+        return `La variable "${trimmedName}" no es valida. Usa camelCase o snake_case sin espacios ni tildes.`;
+      }
+
+      if (duplicatedNames.has(trimmedName)) {
+        return `La variable "${trimmedName}" esta repetida en el formulario.`;
+      }
+
+      duplicatedNames.add(trimmedName);
+
+      if (!field.label?.trim()) {
+        return `El campo "${trimmedName}" debe tener una etiqueta visible.`;
+      }
+
+      if (this.fieldSupportsOptionItems(field.type)) {
+        const optionItems = this.normalizeFieldOptionItems(field);
+        if (!optionItems.length) {
+          return `El campo "${trimmedName}" debe tener al menos una opcion.`;
+        }
+
+        const seenValues = new Set<string>();
+        for (const option of optionItems) {
+          if (!option.label.trim() || !option.value.trim()) {
+            return `Todas las opciones del campo "${trimmedName}" deben tener label y value.`;
+          }
+          if (seenValues.has(option.value)) {
+            return `El campo "${trimmedName}" tiene opciones con values repetidos.`;
+          }
+          seenValues.add(option.value);
+        }
+      }
+    }
+
+    return '';
+  }
+
+  private normalizeFormFieldForSave(field: FormFieldDefinition, order: number): FormFieldDefinition {
+    const optionItems = this.normalizeFieldOptionItems(field);
+    const normalizedType = field.type as FormFieldType;
+
+    return {
+      ...field,
+      name: field.name.trim(),
+      label: field.label.trim(),
+      type: normalizedType,
+      placeholder: this.fieldSupportsPlaceholder(normalizedType) ? (field.placeholder ?? '') : '',
+      helpText: field.helpText ?? '',
+      order,
+      options: this.fieldSupportsOptionItems(normalizedType)
+        ? optionItems.map((option) => option.value)
+        : [],
+      optionItems: this.fieldSupportsOptionItems(normalizedType) ? optionItems : [],
+    };
+  }
+
+  private normalizeFieldOptionItems(field: FormFieldDefinition): FormFieldOptionDefinition[] {
+    const fromOptionItems = this.normalizeOptionCollection(field.optionItems);
+    if (fromOptionItems.length) {
+      return fromOptionItems;
+    }
+
+    const fromOptions = this.normalizeOptionCollection(field.options);
+    if (fromOptions.length) {
+      return fromOptions;
+    }
+
+    return [];
+  }
+
+  private normalizeOptionCollection(rawOptions: unknown): FormFieldOptionDefinition[] {
+    if (!rawOptions) {
+      return [];
+    }
+
+    const values = Array.isArray(rawOptions) ? rawOptions : typeof rawOptions === 'string' ? this.splitLegacyOptions(rawOptions) : [];
+
+    return values
+      .map((option) => this.normalizeOptionValue(option))
+      .filter((option): option is FormFieldOptionDefinition => !!option);
+  }
+
+  private normalizeOptionValue(option: unknown): FormFieldOptionDefinition | null {
+    if (typeof option === 'string') {
+      const trimmed = option.trim();
+      if (!trimmed) {
+        return null;
+      }
+
+      const splitMatch = trimmed.match(/^(.+?)\s*[=:|]\s*(.+)$/);
+      if (splitMatch) {
+        const label = splitMatch[1].trim();
+        const value = splitMatch[2].trim();
+        return label || value ? { label: label || value, value: value || label } : null;
+      }
+
+      return { label: trimmed, value: trimmed };
+    }
+
+    if (option && typeof option === 'object') {
+      const candidate = option as Record<string, unknown>;
+      const label = this.readStringCandidate(candidate['label']) || this.readStringCandidate(candidate['name']) || this.readStringCandidate(candidate['text']);
+      const value =
+        this.readStringCandidate(candidate['value']) ||
+        this.readStringCandidate(candidate['id']) ||
+        this.readStringCandidate(candidate['key']) ||
+        label;
+
+      if (!label && !value) {
+        return null;
+      }
+
+      return {
+        label: label || value,
+        value: value || label,
+      };
+    }
+
+    return null;
+  }
+
+  private splitLegacyOptions(rawValue: string): string[] {
+    return rawValue
+      .split(/[,\n;]/)
+      .map((option) => option.trim())
+      .filter((option) => !!option);
+  }
+
+  private fieldSupportsPlaceholder(type: FormFieldType): boolean {
+    return type === 'text' || type === 'textarea' || type === 'number';
+  }
+
+  private fieldSupportsOptionItems(type: FormFieldType): boolean {
+    return type === 'select' || type === 'checklist';
+  }
+
+  private persistLaneAreaBinding(
+    laneElement: any,
+    areaId: string,
+    areaName: string,
+    moddle: {
+      create: (type: string, attrs?: Record<string, unknown>) => any;
+    },
+    modeling: {
+      updateProperties: (element: any, properties: Record<string, unknown>) => void;
+    },
+  ): void {
+    const extensionValues = laneElement.businessObject.extensionElements?.values ?? [];
+    const values = extensionValues.filter((value: any) => value?.$type !== 'custom:areaRef');
+
+    if (areaId) {
+      values.push(moddle.create('custom:areaRef', { body: areaId }));
+    }
+
+    const extensionElements = moddle.create('bpmn:ExtensionElements', { values });
+    const updatedProperties: Record<string, unknown> = { extensionElements };
+
+    if (areaName && areaName !== 'Area no encontrada') {
+      updatedProperties['name'] = areaName;
+    }
+
+    modeling.updateProperties(laneElement, updatedProperties);
+  }
+
+  private normalizeExportedXml(xml: string): string {
+    if (!xml.trim()) {
+      return xml;
+    }
+
+    const document = new DOMParser().parseFromString(xml, 'application/xml');
+    if (document.getElementsByTagName('parsererror')[0]) {
+      return xml;
+    }
+
+    const processElement = document.getElementsByTagNameNS('http://www.omg.org/spec/BPMN/20100524/MODEL', 'process')[0];
+    if (!processElement) {
+      return xml;
+    }
+
+    this.removeUnsupportedAttributes(document);
+
+    const normalizedProcessKey = this.normalizeProcessKey(this.processKey || this.processName);
+    const normalizedProcessName = this.processName?.trim() || 'Proceso sin nombre';
+
+    processElement.setAttribute('id', normalizedProcessKey);
+    processElement.setAttribute('name', normalizedProcessName);
+    processElement.setAttribute('isExecutable', 'true');
+
+    const participant = document.getElementsByTagNameNS('http://www.omg.org/spec/BPMN/20100524/MODEL', 'participant')[0];
+    if (participant) {
+      participant.setAttribute('processRef', normalizedProcessKey);
+      if (!participant.getAttribute('name')) {
+        participant.setAttribute('name', normalizedProcessName);
+      }
+    }
+
+    return new XMLSerializer().serializeToString(document);
+  }
+
+  private removeUnsupportedAttributes(document: Document): void {
+    const elements = Array.from(document.getElementsByTagName('*'));
+    for (const element of elements) {
+      Array.from(element.attributes).forEach((attribute) => {
+        if (attribute.name === 'structureType' || attribute.localName === 'structureType') {
+          element.removeAttributeNode(attribute);
+        }
+      });
+    }
+  }
+
+  private normalizeProcessKey(source: string): string {
+    const cleaned = (source ?? '').trim().toLowerCase();
+    if (!cleaned) {
+      return 'proceso_sin_nombre';
+    }
+
+    return (
+      cleaned
+        .normalize('NFD')
+        .replace(/[\u0300-\u036f]/g, '')
+        .replace(/[^a-z0-9]+/g, '_')
+        .replace(/^_+|_+$/g, '') || 'proceso_sin_nombre'
+    );
+  }
+}

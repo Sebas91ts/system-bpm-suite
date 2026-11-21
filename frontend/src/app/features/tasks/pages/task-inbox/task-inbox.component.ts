@@ -1,0 +1,1480 @@
+import { CommonModule } from '@angular/common';
+import { ChangeDetectorRef, Component, OnDestroy, OnInit, inject } from '@angular/core';
+import { ActivatedRoute, Router } from '@angular/router';
+import { FormsModule } from '@angular/forms';
+import { finalize, forkJoin, firstValueFrom, of } from 'rxjs';
+import { TaskInstanceService } from '../../../../core/services/task-instance.service';
+import { TareaInstancia } from '../../../../core/models/task-instance.models';
+import { AuthService } from '../../../../core/services/auth.service';
+import {
+  FormDefinition,
+  FormFieldDefinition,
+  FormFieldOptionDefinition,
+  UploadedFileMetadata,
+} from '../../../../core/models/form.models';
+import { AiService, FormFillSuggestion } from '../../../../core/services/ai.service';
+import { FormService } from '../../../../core/services/form.service';
+import { FileUploadService } from '../../../../core/services/file-upload.service';
+import { ApiResponse } from '../../../../core/models/auth.models';
+import { DocumentMetadata } from '../../../../core/models/document-lifecycle.models';
+import { RealtimeService } from '../../../../core/services/realtime.service';
+import { DocumentLifecycleService } from '../../../../core/services/document-lifecycle.service';
+import { DocumentRepositoryService } from '../../../../core/services/document-repository.service';
+import { TaskDocumentRuntime, TaskDocumentRuntimeRequirement } from '../../../../core/models/task-document-runtime.models';
+import { TranslationKey, UiPreferencesService } from '../../../../core/services/ui-preferences.service';
+
+interface BrowserSpeechRecognitionEvent {
+  results: ArrayLike<{
+    isFinal: boolean;
+    length: number;
+    [index: number]: {
+      transcript: string;
+    };
+  }>;
+}
+
+interface BrowserSpeechRecognition {
+  continuous: boolean;
+  interimResults: boolean;
+  lang: string;
+  onstart: (() => void) | null;
+  onresult: ((event: BrowserSpeechRecognitionEvent) => void) | null;
+  onerror: ((event: { error?: string }) => void) | null;
+  onend: (() => void) | null;
+  start(): void;
+  stop(): void;
+}
+
+type SpeechRecognitionConstructor = new () => BrowserSpeechRecognition;
+
+@Component({
+  selector: 'app-task-inbox',
+  standalone: true,
+  imports: [CommonModule, FormsModule],
+  templateUrl: './task-inbox.component.html',
+  styleUrl: './task-inbox.component.css',
+})
+export class TaskInboxComponent implements OnInit, OnDestroy {
+  private static readonly MAX_UPLOAD_BYTES = 10 * 1024 * 1024;
+
+  private readonly taskService = inject(TaskInstanceService);
+  private readonly authService = inject(AuthService);
+  private readonly formService = inject(FormService);
+  private readonly fileUploadService = inject(FileUploadService);
+  private readonly documentRepositoryService = inject(DocumentRepositoryService);
+  private readonly documentLifecycleService = inject(DocumentLifecycleService);
+  private readonly aiService = inject(AiService);
+  private readonly route = inject(ActivatedRoute);
+  private readonly router = inject(Router);
+  private readonly cdr = inject(ChangeDetectorRef);
+  private readonly realtimeService = inject(RealtimeService);
+  private readonly preferences = inject(UiPreferencesService);
+
+  protected tasks: TareaInstancia[] = [];
+  protected isLoading = false;
+  protected errorMessage = '';
+  protected successMessage = '';
+  protected viewMode: 'mine' | 'area' | 'all' = 'mine';
+  protected myTasksCount = 0;
+  protected myAreaTasksCount = 0;
+  protected allTasksCount = 0;
+  protected quickWorkTask: TareaInstancia | null = null;
+  protected quickWorkLoading = false;
+  protected quickWorkSaving = false;
+  protected quickWorkError = '';
+  protected quickWorkSuccess = '';
+  protected quickWorkForm: FormDefinition | null = null;
+  protected quickWorkValues: Record<string, unknown> = {};
+  protected quickWorkFileState: Record<string, { uploading: boolean; error: string }> = {};
+  protected quickWorkDocumentRuntime: TaskDocumentRuntime | null = null;
+  protected quickWorkDocumentsLoading = false;
+  protected quickWorkDocumentsMessage = '';
+  protected quickWorkDocumentUploadState: Record<string, { uploading: boolean; error: string }> = {};
+  protected readonly isVoiceInputSupported = this.getSpeechRecognitionConstructor() !== null;
+  protected isQuickWorkVoiceRecording = false;
+  protected isQuickWorkAiFilling = false;
+  protected quickWorkTranscript = '';
+  protected quickWorkVoiceError = '';
+  protected quickWorkAiSummary = '';
+  protected quickWorkAiFilledFieldsCount = 0;
+  protected searchTerm = '';
+  protected selectedProcess = '';
+  protected selectedInstance = '';
+  protected selectedStatus: 'all' | 'assigned' | 'available' = 'all';
+  protected groupBy: 'none' | 'area' | 'process' = 'none';
+
+  private feedbackTimer: ReturnType<typeof setTimeout> | null = null;
+  private queryParamsSubscription?: { unsubscribe: () => void };
+  private realtimeSubscription?: { unsubscribe: () => void };
+  private speechRecognition?: BrowserSpeechRecognition;
+  private speechRecognitionConstructor = this.getSpeechRecognitionConstructor();
+
+  ngOnInit(): void {
+    this.subscribeRealtimeTopics();
+    this.queryParamsSubscription = this.route.queryParamMap.subscribe((params) => {
+      const mode = params.get('mode');
+      const instanceId = params.get('instanceId');
+      this.viewMode = mode === 'area' ? 'area' : mode === 'all' ? 'all' : 'mine';
+      void this.loadTasks(instanceId || undefined);
+    });
+  }
+
+  ngOnDestroy(): void {
+    this.queryParamsSubscription?.unsubscribe();
+    this.realtimeSubscription?.unsubscribe();
+    this.stopQuickWorkVoiceCapture(true);
+    this.clearFeedbackTimer();
+  }
+
+  protected t(key: TranslationKey): string {
+    return this.preferences.translate(key);
+  }
+
+  protected async refreshTasks(): Promise<void> {
+    await this.loadTasks();
+  }
+
+  protected async showMine(): Promise<void> {
+    await this.router.navigate(['/tasks'], { queryParams: { mode: 'mine' } });
+  }
+
+  protected async showArea(): Promise<void> {
+    await this.router.navigate(['/tasks'], { queryParams: { mode: 'area' } });
+  }
+
+  protected async showAll(): Promise<void> {
+    await this.router.navigate(['/tasks'], { queryParams: { mode: 'all' } });
+  }
+
+  protected goBack(): void {
+    const isAdmin = this.authService.isAdmin();
+    void this.router.navigate([isAdmin ? '/admin' : '/user']);
+  }
+
+  protected formatDate(value?: string | null): string {
+    if (!value) {
+      return 'Sin fecha';
+    }
+
+    return new Date(value).toLocaleString();
+  }
+
+  protected getProcessLabel(task: TareaInstancia): string {
+    const processName = task.nombreProceso?.trim();
+    if (processName) {
+      return processName;
+    }
+
+    const processId = task.processDefinitionId?.trim();
+    if (!processId) {
+      return 'Proceso no identificado';
+    }
+
+    const [key] = processId.split(':');
+    return key?.trim() || 'Proceso no identificado';
+  }
+
+  protected getTaskLabel(task: TareaInstancia): string {
+    return task.name?.trim() || 'Tarea sin nombre';
+  }
+
+  protected getInstanceShortLabel(task: TareaInstancia): string {
+    const instanceId = task.processInstanceId?.trim();
+    if (!instanceId) {
+      return 'Instancia no identificada';
+    }
+
+    return `Instancia #${instanceId.slice(-6)}`;
+  }
+
+  protected getAssigneeLabel(task: TareaInstancia): string {
+    return task.assignee?.trim() || 'Sin asignar';
+  }
+
+  protected isTaskTakenByMe(task: TareaInstancia): boolean {
+    const currentUser = this.authService.currentUser();
+    if (!currentUser?.email || !task.assignee) {
+      return false;
+    }
+
+    return currentUser.email.trim().toLowerCase() === task.assignee.trim().toLowerCase();
+  }
+
+  protected canWorkNow(task: TareaInstancia): boolean {
+    return this.isTaskTakenByMe(task);
+  }
+
+  protected getAreaLabel(task: TareaInstancia): string {
+    return task.areaNombre?.trim() || 'Área no identificada';
+  }
+
+  protected canClaimTask(task: TareaInstancia): boolean {
+    const user = this.authService.currentUser();
+    if (!user?.areaId || !task?.areaId || task.assignee) {
+      return false;
+    }
+
+    return user.areaId.trim().toLowerCase() === task.areaId.trim().toLowerCase();
+  }
+
+  protected getClaimHint(task: TareaInstancia): string {
+    if (task.assignee) {
+      return `Asignada a ${this.getAssigneeLabel(task)}`;
+    }
+
+    const user = this.authService.currentUser();
+    if (!task.areaId) {
+      return 'Area no identificada';
+    }
+
+    if (!user?.areaId) {
+      return `Solo usuarios del area ${this.getAreaLabel(task)} pueden tomar esta tarea`;
+    }
+
+    if (user.areaId.trim().toLowerCase() !== task.areaId.trim().toLowerCase()) {
+      return `Solo usuarios del area ${this.getAreaLabel(task)} pueden tomar esta tarea`;
+    }
+
+    return 'Puedes tomar esta tarea';
+  }
+
+  protected get filterSummary(): string {
+    if (this.viewMode === 'all') {
+      return 'Todas las tareas de Camunda';
+    }
+
+    if (this.viewMode === 'area') {
+      return 'Tareas de mi area';
+    }
+
+    return 'Mis tareas';
+  }
+
+  protected get showAllTab(): boolean {
+    return this.authService.isAdmin();
+  }
+
+  protected get myTasksTabLabel(): string {
+    return `Mis tareas${this.myTasksCount > 0 ? ` (${this.myTasksCount})` : ''}`;
+  }
+
+  protected get myAreaTabLabel(): string {
+    return `Tareas de mi area${this.myAreaTasksCount > 0 ? ` (${this.myAreaTasksCount})` : ''}`;
+  }
+
+  protected get allTasksTabLabel(): string {
+    return `Todas${this.allTasksCount > 0 ? ` (${this.allTasksCount})` : ''}`;
+  }
+
+  protected get processOptions(): Array<{ value: string; label: string }> {
+    const seen = new Map<string, string>();
+
+    for (const task of this.tasks) {
+      const value = task.processDefinitionId?.trim();
+      if (!value || seen.has(value)) {
+        continue;
+      }
+
+      seen.set(value, this.getProcessLabel(task));
+    }
+
+    return Array.from(seen.entries())
+      .map(([value, label]) => ({ value, label }))
+      .sort((a, b) => a.label.localeCompare(b.label));
+  }
+
+  protected get instanceOptions(): TareaInstancia[] {
+    const seen = new Set<string>();
+    return this.tasks.filter((task) => {
+      const id = task.processInstanceId ?? '';
+      if (!id || seen.has(id)) {
+        return false;
+      }
+
+      seen.add(id);
+      return true;
+    });
+  }
+
+  protected get filteredTasks(): TareaInstancia[] {
+    return this.tasks.filter((task) => this.matchesTaskFilters(task));
+  }
+
+  protected get groupedTasks(): Array<{ key: string; label: string; tasks: TareaInstancia[] }> {
+    const source = this.filteredTasks;
+    if (this.groupBy === 'none') {
+      return [
+        {
+          key: 'all',
+          label: '',
+          tasks: source,
+        },
+      ];
+    }
+
+    const groups = new Map<string, TareaInstancia[]>();
+    for (const task of source) {
+      const key = this.groupBy === 'area' ? (task.areaId ?? task.areaNombre ?? 'sin-area') : this.getProcessLabel(task);
+      const current = groups.get(key) ?? [];
+      current.push(task);
+      groups.set(key, current);
+    }
+
+    return Array.from(groups.entries()).map(([key, tasks]) => ({
+      key,
+      label: this.groupBy === 'area' ? this.getAreaLabel(tasks[0]) : this.getProcessLabel(tasks[0]),
+      tasks,
+    }));
+  }
+
+  protected getInstanceLabel(task: TareaInstancia): string {
+    return this.getInstanceShortLabel(task);
+  }
+
+  protected openTask(task: TareaInstancia): void {
+    if (!this.canWorkNow(task)) {
+      return;
+    }
+
+    this.openQuickWork(task);
+  }
+
+  protected openQuickWork(task: TareaInstancia): void {
+    if (!task?.id) {
+      return;
+    }
+
+    this.quickWorkTask = task;
+    this.quickWorkLoading = true;
+    this.quickWorkError = '';
+    this.quickWorkSuccess = '';
+    this.quickWorkForm = null;
+    this.quickWorkValues = {};
+    this.quickWorkFileState = {};
+    this.quickWorkDocumentRuntime = null;
+    this.quickWorkDocumentsMessage = '';
+    this.quickWorkDocumentUploadState = {};
+    this.cdr.detectChanges();
+
+    this.taskService.obtenerPorId(task.id).pipe(
+      finalize(() => {
+        this.quickWorkLoading = false;
+        this.cdr.detectChanges();
+      }),
+    ).subscribe({
+      next: (response) => {
+        const loadedTask = response.data ?? task;
+        this.quickWorkTask = loadedTask;
+        this.loadQuickWorkForm(loadedTask);
+        this.loadQuickWorkDocuments(loadedTask);
+        this.cdr.detectChanges();
+      },
+      error: (error: any) => {
+        this.quickWorkError = error?.error?.message || 'No se pudo abrir la tarea.';
+        this.cdr.detectChanges();
+      },
+    });
+  }
+
+  protected closeQuickWork(): void {
+    if (this.quickWorkSaving) {
+      return;
+    }
+
+    this.stopQuickWorkVoiceCapture(true);
+    this.quickWorkTask = null;
+    this.quickWorkForm = null;
+    this.quickWorkValues = {};
+    this.quickWorkFileState = {};
+    this.quickWorkDocumentRuntime = null;
+    this.quickWorkDocumentsMessage = '';
+    this.quickWorkDocumentUploadState = {};
+    this.quickWorkError = '';
+    this.quickWorkSuccess = '';
+    this.quickWorkTranscript = '';
+    this.quickWorkVoiceError = '';
+    this.quickWorkAiSummary = '';
+    this.quickWorkAiFilledFieldsCount = 0;
+  }
+
+  protected get quickWorkProcessLabel(): string {
+    return this.quickWorkTask ? this.getProcessLabel(this.quickWorkTask) : '';
+  }
+
+  protected get quickWorkAreaLabel(): string {
+    return this.quickWorkTask ? this.getAreaLabel(this.quickWorkTask) : '';
+  }
+
+  protected get quickWorkHasForm(): boolean {
+    return !!this.quickWorkForm;
+  }
+
+  protected get quickWorkIsFormValid(): boolean {
+    if (!this.quickWorkForm) {
+      return true;
+    }
+
+    return (this.quickWorkForm.fields ?? []).every((field) => {
+      if (!field.required) {
+        return true;
+      }
+
+      if (field.type === 'file') {
+        const selectedFile = this.getQuickWorkSelectedFile(field.name);
+        return !!selectedFile;
+      }
+
+      if (field.type === 'checkbox') {
+        return this.quickWorkValues[field.name] === true;
+      }
+
+      if (field.type === 'checklist') {
+        return this.getQuickWorkChecklistValues(field.name).length > 0;
+      }
+
+      const value = this.quickWorkValues[field.name];
+      if (value === undefined || value === null) {
+        return false;
+      }
+
+      return typeof value === 'string' ? value.trim().length > 0 : true;
+    });
+  }
+
+  protected get quickWorkHasDocumentRequirements(): boolean {
+    return !!this.quickWorkDocumentRuntime?.requirements?.length;
+  }
+
+  protected get quickWorkHasMissingRequiredDocuments(): boolean {
+    return (this.quickWorkDocumentRuntime?.summary?.missingRequired ?? 0) > 0;
+  }
+
+  protected get quickWorkMissingRequiredDocumentsLabel(): string {
+    const missing = this.quickWorkDocumentRuntime?.requirements
+      ?.filter((requirement) => requirement.required && requirement.status === 'MISSING')
+      .map((requirement) => requirement.name)
+      .filter(Boolean) ?? [];
+
+    return missing.join(', ');
+  }
+
+  protected get isAnyFileUploading(): boolean {
+    return false;
+  }
+
+  protected isQuickWorkFieldMissing(field: FormFieldDefinition): boolean {
+    if (!field.required) {
+      return false;
+    }
+
+    if (field.type === 'file') {
+      return !this.getQuickWorkSelectedFile(field.name) && !this.getQuickWorkFile(field.name);
+    }
+
+    if (field.type === 'checkbox') {
+      return this.quickWorkValues[field.name] !== true;
+    }
+
+    if (field.type === 'checklist') {
+      return this.getQuickWorkChecklistValues(field.name).length === 0;
+    }
+
+    const value = this.quickWorkValues[field.name];
+    if (value === undefined || value === null) {
+      return true;
+    }
+
+    return typeof value === 'string' ? value.trim().length === 0 : false;
+  }
+
+  protected getQuickWorkFieldValue(field: FormFieldDefinition): string | number | boolean | '' {
+    const value = this.quickWorkValues[field.name];
+    if (typeof value === 'boolean' || typeof value === 'number') {
+      return value;
+    }
+
+    return typeof value === 'string' ? value : '';
+  }
+
+  protected setQuickWorkFieldValue(fieldName: string, value: unknown): void {
+    this.quickWorkValues[fieldName] = value as never;
+  }
+
+  protected getQuickWorkFieldOptions(field: FormFieldDefinition): FormFieldOptionDefinition[] {
+    if (field.optionItems?.length) {
+      return field.optionItems;
+    }
+
+    return (field.options ?? []).map((option) => ({
+      label: option,
+      value: option,
+    }));
+  }
+
+  protected getQuickWorkChecklistValues(fieldName: string): string[] {
+    const value = this.quickWorkValues[fieldName];
+    return Array.isArray(value) ? value.filter((item): item is string => typeof item === 'string') : [];
+  }
+
+  protected isQuickWorkChecklistSelected(fieldName: string, optionValue: string): boolean {
+    return this.getQuickWorkChecklistValues(fieldName).includes(optionValue);
+  }
+
+  protected toggleQuickWorkChecklistValue(fieldName: string, optionValue: string, checked: boolean): void {
+    const currentValues = this.getQuickWorkChecklistValues(fieldName);
+    const nextValues = checked
+      ? Array.from(new Set([...currentValues, optionValue]))
+      : currentValues.filter((value) => value !== optionValue);
+
+    this.quickWorkValues[fieldName] = nextValues;
+  }
+
+  protected getQuickWorkFile(fieldName: string): UploadedFileMetadata | null {
+    const value = this.quickWorkValues[fieldName];
+    if (!value || typeof value !== 'object') {
+      return null;
+    }
+
+    if (value instanceof File) {
+      return null;
+    }
+
+    return value as UploadedFileMetadata;
+  }
+
+  protected getQuickWorkSelectedFile(fieldName: string): File | null {
+    const value = this.quickWorkValues[fieldName];
+    return value instanceof File ? value : null;
+  }
+
+  protected getQuickWorkFileLabel(fieldName: string): string {
+    const selectedFile = this.getQuickWorkSelectedFile(fieldName);
+    if (selectedFile) {
+      return selectedFile.name;
+    }
+
+    const metadata = this.getQuickWorkFile(fieldName);
+    return metadata?.fileName || '';
+  }
+
+  protected isQuickWorkFileUploading(fieldName: string): boolean {
+    return false;
+  }
+
+  protected getQuickWorkFileError(fieldName: string): string {
+    return this.quickWorkFileState[fieldName]?.error || '';
+  }
+
+  protected onQuickWorkFileSelected(field: FormFieldDefinition, event: Event): void {
+    const input = event.target as HTMLInputElement | null;
+    const file = input?.files?.[0] ?? null;
+    if (!file) {
+      return;
+    }
+
+    if (file.size > TaskInboxComponent.MAX_UPLOAD_BYTES) {
+      this.quickWorkFileState[field.name] = {
+        uploading: false,
+        error: 'El archivo supera el limite de 10 MB.',
+      };
+      this.cdr.detectChanges();
+      if (input) {
+        input.value = '';
+      }
+      return;
+    }
+
+    this.quickWorkValues[field.name] = file;
+    this.quickWorkFileState[field.name] = { uploading: false, error: '' };
+    this.cdr.detectChanges();
+  }
+
+  protected toggleQuickWorkVoiceCapture(): void {
+    if (!this.isVoiceInputSupported) {
+      this.quickWorkVoiceError = 'Tu navegador no soporta reconocimiento de voz en esta pantalla.';
+      return;
+    }
+
+    if (this.isQuickWorkVoiceRecording) {
+      this.stopQuickWorkVoiceCapture();
+      return;
+    }
+
+    this.startQuickWorkVoiceCapture();
+  }
+
+  protected suggestQuickWorkWithAi(): void {
+    if (!this.quickWorkForm || !this.quickWorkTask || this.isQuickWorkAiFilling) {
+      return;
+    }
+
+    const transcript = this.quickWorkTranscript.trim();
+    if (!transcript) {
+      this.quickWorkError = 'Primero dicta o escribe la transcripción para que la IA sugiera valores.';
+      this.cdr.detectChanges();
+      return;
+    }
+
+    this.isQuickWorkAiFilling = true;
+    this.quickWorkError = '';
+    this.quickWorkSuccess = '';
+    this.quickWorkAiSummary = '';
+    this.quickWorkAiFilledFieldsCount = 0;
+    this.cdr.detectChanges();
+
+    const request = {
+      transcript,
+      processName: this.quickWorkProcessLabel,
+      taskName: this.getTaskName(this.quickWorkTask),
+      areaName: this.getAreaLabel(this.quickWorkTask),
+      currentValues: this.buildQuickWorkAiCurrentValues(),
+      fields: (this.quickWorkForm.fields ?? []).map((field) => ({
+        name: field.name,
+        label: field.label || field.name,
+        type: field.type,
+        required: field.required,
+        placeholder: field.placeholder ?? null,
+        helpText: field.helpText ?? null,
+        options: this.getQuickWorkFieldOptions(field).map((option) => option.value),
+      })),
+    };
+
+    this.aiService
+      .sugerirFormulario(request)
+      .pipe(
+        finalize(() => {
+          this.isQuickWorkAiFilling = false;
+          this.cdr.detectChanges();
+        }),
+      )
+      .subscribe({
+        next: (response) => {
+          if (!response.success || !response.data) {
+            this.quickWorkError = response.message || 'No se pudo sugerir el llenado del formulario.';
+            return;
+          }
+
+          const appliedCount = this.applyQuickWorkAiSuggestions(response.data.suggestions ?? []);
+          this.quickWorkAiSummary = response.data.summary || 'La IA preparó sugerencias para este formulario.';
+          this.quickWorkAiFilledFieldsCount = appliedCount;
+          this.quickWorkSuccess = appliedCount
+            ? `La IA completó ${appliedCount} campo(s). Revisa el formulario antes de enviarlo.`
+            : 'La IA no encontró datos suficientes para completar campos automáticamente.';
+        },
+        error: (error: any) => {
+          this.quickWorkError = error?.error?.message || 'No se pudo sugerir el llenado del formulario.';
+        },
+      });
+  }
+
+  protected async completeQuickWork(): Promise<void> {
+    if (!this.quickWorkTask?.id || this.quickWorkSaving) {
+      return;
+    }
+
+    if (this.quickWorkForm && !this.quickWorkIsFormValid) {
+      this.quickWorkError = 'Completa los campos obligatorios antes de finalizar la tarea.';
+      this.cdr.markForCheck();
+      return;
+    }
+
+    if (this.quickWorkHasMissingRequiredDocuments) {
+      const missing = this.quickWorkMissingRequiredDocumentsLabel;
+      this.quickWorkError = missing
+        ? `No puedes completar la tarea. Falta adjuntar: ${missing}.`
+        : 'No puedes completar la tarea. Faltan documentos obligatorios.';
+      this.cdr.markForCheck();
+      return;
+    }
+
+    this.quickWorkSaving = true;
+    this.quickWorkError = '';
+    this.quickWorkSuccess = '';
+    this.cdr.markForCheck();
+
+    try {
+      const variables = this.quickWorkForm ? await this.buildQuickWorkVariablesWithUploads() : {};
+      console.info('[TaskInbox] Completing task with variables', {
+        taskId: this.quickWorkTask.id,
+        variables,
+      });
+
+      await firstValueFrom(this.taskService.completarTareaConVariables(this.quickWorkTask.id, variables));
+      this.quickWorkSuccess = 'La tarea se completó correctamente.';
+      this.cdr.markForCheck();
+      await this.loadTasks();
+      setTimeout(() => this.closeQuickWork(), 900);
+    } catch (error: any) {
+      this.quickWorkError = error?.error?.message || 'No se pudo completar la tarea.';
+      this.cdr.markForCheck();
+    } finally {
+      this.quickWorkSaving = false;
+      this.cdr.markForCheck();
+    }
+  }
+
+  protected takeTask(task: TareaInstancia): void {
+    if (!task.id || !this.canClaimTask(task)) {
+      return;
+    }
+
+    this.isLoading = true;
+    this.cdr.detectChanges();
+
+    this.taskService
+      .tomarTarea(task.id)
+      .pipe(
+        finalize(() => {
+          this.isLoading = false;
+          this.cdr.detectChanges();
+        }),
+      )
+      .subscribe({
+        next: () => {
+          this.showFeedback(`La tarea "${this.getTaskName(task)}" fue tomada correctamente.`, 'success');
+          void this.loadTasks();
+        },
+        error: (error: any) => {
+          this.showFeedback(error?.error?.message || 'No se pudo tomar la tarea.', 'error');
+        },
+      });
+  }
+
+  protected trackByInstance(_: number, task: TareaInstancia): string {
+    return task.processInstanceId ?? task.id;
+  }
+
+  protected trackByGroup(_: number, group: { key: string }): string {
+    return group.key;
+  }
+
+  protected async completeTask(task: TareaInstancia): Promise<void> {
+    if (!task.id) {
+      return;
+    }
+
+    this.isLoading = true;
+    this.cdr.detectChanges();
+
+    this.taskService
+      .completarTarea(task.id)
+      .pipe(
+        finalize(() => {
+          this.isLoading = false;
+          this.cdr.detectChanges();
+        }),
+      )
+      .subscribe({
+        next: () => {
+          this.showFeedback(`La tarea "${this.getTaskName(task)}" se completó correctamente.`, 'success');
+          void this.loadTasks();
+        },
+        error: (error: any) => {
+          this.showFeedback(error?.error?.message || 'No se pudo completar la tarea.', 'error');
+        },
+      });
+  }
+
+  private async loadTasks(autoOpenInstanceId?: string): Promise<void> {
+    this.isLoading = true;
+    this.errorMessage = '';
+    this.cdr.detectChanges();
+
+    const request$ = this.viewMode === 'all'
+      ? this.taskService.listarTodasCamunda()
+      : this.viewMode === 'area'
+        ? this.taskService.listarTareasDeMiArea()
+        : this.taskService.listarMisTareas();
+
+    forkJoin({
+      current: request$,
+      mine: this.taskService.listarMisTareas().pipe(finalize(() => undefined)),
+      area: this.taskService.listarTareasDeMiArea().pipe(finalize(() => undefined)),
+      all: this.showAllTab ? this.taskService.listarTodasCamunda().pipe(finalize(() => undefined)) : of(null),
+    })
+      .pipe(
+        finalize(() => {
+          this.isLoading = false;
+          this.cdr.detectChanges();
+        }),
+      )
+      .subscribe({
+        next: (result) => {
+          const tasks = result.current?.data ?? [];
+          const areaTasks = result.area?.data ?? [];
+          this.tasks = tasks;
+          this.myTasksCount = result.mine?.data?.length ?? 0;
+          this.myAreaTasksCount = areaTasks.length;
+          this.allTasksCount = this.showAllTab ? (result.all?.data?.length ?? 0) : 0;
+          this.showFeedback(`Se cargaron ${tasks.length} tareas activas de Camunda.`, 'success');
+          if (autoOpenInstanceId) {
+            void this.openInstanceTask(autoOpenInstanceId, tasks, areaTasks);
+          }
+          this.cdr.detectChanges();
+        },
+        error: (error: any) => {
+          this.tasks = [];
+          this.myTasksCount = 0;
+          this.myAreaTasksCount = 0;
+          this.allTasksCount = 0;
+          this.showFeedback(error?.error?.message || 'No se pudieron cargar las tareas de Camunda.', 'error');
+          this.cdr.detectChanges();
+        },
+      });
+  }
+
+  protected clearFilters(): void {
+    this.searchTerm = '';
+    this.selectedProcess = '';
+    this.selectedInstance = '';
+    this.selectedStatus = 'all';
+    this.groupBy = 'none';
+  }
+
+  protected get groupSummary(): string {
+    if (this.groupBy === 'area') {
+      return 'Agrupadas por area';
+    }
+
+    if (this.groupBy === 'process') {
+      return 'Agrupadas por proceso';
+    }
+
+    return 'Vista sin agrupacion';
+  }
+
+  private matchesTaskFilters(task: TareaInstancia): boolean {
+    const text = this.searchTerm.trim().toLowerCase();
+    const matchesText =
+      !text ||
+      [this.getTaskLabel(task), this.getProcessLabel(task), this.getAreaLabel(task), this.getAssigneeLabel(task)]
+        .join(' ')
+        .toLowerCase()
+        .includes(text);
+
+    const matchesProcess = !this.selectedProcess || (task.processDefinitionId ?? '').trim() === this.selectedProcess;
+    const matchesInstance = !this.selectedInstance || (task.processInstanceId ?? '').trim() === this.selectedInstance;
+    const matchesStatus =
+      this.selectedStatus === 'all' ||
+      (this.selectedStatus === 'assigned' && !!task.assignee) ||
+      (this.selectedStatus === 'available' && !task.assignee);
+
+    return matchesText && matchesProcess && matchesInstance && matchesStatus;
+  }
+
+  private async openInstanceTask(
+    instanceId: string,
+    currentTasks: TareaInstancia[],
+    areaTasks: TareaInstancia[],
+  ): Promise<void> {
+    const matchingTask =
+      currentTasks.find((task) => task.processInstanceId === instanceId) ||
+      areaTasks.find((task) => task.processInstanceId === instanceId);
+
+    if (!matchingTask) {
+      this.showFeedback('La instancia se inició, pero todavía no aparece la primera tarea.', 'success');
+      return;
+    }
+
+    const currentUser = this.authService.currentUser();
+    if (!matchingTask.assignee && currentUser?.areaId && matchingTask.areaId?.trim()?.toLowerCase() === currentUser.areaId.trim().toLowerCase()) {
+      try {
+        await firstValueFrom(this.taskService.tomarTarea(matchingTask.id));
+      } catch (error: any) {
+        this.showFeedback(error?.error?.message || 'No se pudo tomar automáticamente la primera tarea.', 'error');
+        return;
+      }
+    }
+
+    this.openQuickWork({
+      ...matchingTask,
+      assignee: currentUser?.email || matchingTask.assignee || null,
+      assignedTo: currentUser?.email || matchingTask.assignedTo || null,
+    });
+  }
+
+  protected getTaskName(task: TareaInstancia): string {
+    return task.name || task.nombreTarea || 'Tarea sin nombre';
+  }
+
+  private loadQuickWorkForm(task: TareaInstancia): void {
+    const processKey = this.getProcessKey(task);
+    const taskDefinitionKey = task.taskDefinitionKey || '';
+    if (!processKey || !taskDefinitionKey) {
+      this.quickWorkForm = null;
+      this.quickWorkLoading = false;
+      this.quickWorkError = '';
+      this.cdr.detectChanges();
+      return;
+    }
+
+    this.formService.obtenerFormulario(processKey, this.getProcessVersion(task), taskDefinitionKey).subscribe({
+      next: (response: ApiResponse<FormDefinition>) => {
+        this.quickWorkForm = response.data ?? null;
+        this.quickWorkValues = {};
+        this.quickWorkFileState = {};
+        this.quickWorkTranscript = '';
+        this.quickWorkVoiceError = '';
+        this.quickWorkAiSummary = '';
+        this.quickWorkAiFilledFieldsCount = 0;
+        if (!this.quickWorkForm) {
+          this.quickWorkError = 'Esta tarea no tiene formulario configurado.';
+        }
+        this.cdr.detectChanges();
+      },
+      error: () => {
+        this.quickWorkForm = null;
+        this.quickWorkError = 'Esta tarea no tiene formulario configurado.';
+        this.cdr.detectChanges();
+      },
+    });
+  }
+
+  private loadQuickWorkDocuments(task: TareaInstancia): void {
+    if (!task.id) {
+      this.quickWorkDocumentRuntime = null;
+      this.quickWorkDocumentsMessage = '';
+      return;
+    }
+
+    this.quickWorkDocumentsLoading = true;
+    this.quickWorkDocumentsMessage = '';
+    this.cdr.detectChanges();
+
+    this.taskService
+      .obtenerDocumentosRuntime(task.id)
+      .pipe(
+        finalize(() => {
+          this.quickWorkDocumentsLoading = false;
+          this.cdr.detectChanges();
+        }),
+      )
+      .subscribe({
+        next: (response) => {
+          this.quickWorkDocumentRuntime = response.data ?? null;
+          this.quickWorkDocumentsMessage = this.quickWorkHasDocumentRequirements
+            ? ''
+            : 'Esta tarea no tiene documentos configurados.';
+          this.cdr.detectChanges();
+        },
+        error: (error: any) => {
+          this.quickWorkDocumentRuntime = null;
+          this.quickWorkDocumentsMessage = error?.error?.message || 'No se pudo cargar la configuracion documental de la tarea.';
+          this.cdr.detectChanges();
+        },
+      });
+  }
+
+  protected onQuickWorkTaskDocumentSelected(requirement: TaskDocumentRuntimeRequirement, event: Event): void {
+    const input = event.target as HTMLInputElement | null;
+    const file = input?.files?.[0] ?? null;
+    if (!file || !this.quickWorkTask || !requirement.id) {
+      return;
+    }
+
+    if (!requirement.canUpload) {
+      this.setQuickWorkDocumentUploadError(requirement.id, 'Tu area no tiene permiso para subir este documento.');
+      if (input) {
+        input.value = '';
+      }
+      return;
+    }
+
+    const currentUser = this.authService.currentUser();
+    const tenantId = currentUser?.areaId || this.quickWorkTask.areaId || currentUser?.tenantId || '';
+    if (!tenantId || !this.quickWorkTask.processInstanceId) {
+      this.setQuickWorkDocumentUploadError(requirement.id, 'No se pudo identificar el contexto BPM para subir el documento.');
+      return;
+    }
+
+    this.quickWorkDocumentUploadState[requirement.id] = { uploading: true, error: '' };
+    this.cdr.detectChanges();
+
+    this.documentRepositoryService
+      .uploadTaskDocument(file, {
+        tenantId,
+        processInstanceId: this.quickWorkTask.processInstanceId,
+        processKey: this.getProcessKey(this.quickWorkTask),
+        processVersion: this.getProcessVersion(this.quickWorkTask),
+        taskDefinitionKey: this.quickWorkTask.taskDefinitionKey || '',
+        taskInstanceId: this.quickWorkTask.id,
+        documentRequirementId: requirement.id,
+      })
+      .pipe(
+        finalize(() => {
+          this.quickWorkDocumentUploadState[requirement.id!] = {
+            uploading: false,
+            error: this.quickWorkDocumentUploadState[requirement.id!]?.error || '',
+          };
+          if (input) {
+            input.value = '';
+          }
+          this.cdr.detectChanges();
+        }),
+      )
+      .subscribe({
+        next: () => {
+          this.quickWorkSuccess = `${requirement.name || 'Documento'} subido correctamente.`;
+          this.loadQuickWorkDocuments(this.quickWorkTask!);
+        },
+        error: (error: any) => {
+          this.setQuickWorkDocumentUploadError(requirement.id!, error?.error?.message || 'No se pudo subir el documento.');
+        },
+      });
+  }
+
+  protected openQuickWorkDocumentEditor(document: DocumentMetadata): void {
+    void this.router.navigate(['/documents', document.id, 'editor']);
+  }
+
+  protected downloadQuickWorkDocument(document: DocumentMetadata): void {
+    this.documentRepositoryService.getDownloadUrl(document.id).subscribe({
+      next: (response) => {
+        const url = response.data?.downloadUrl;
+        if (url) {
+          window.open(url, '_blank', 'noopener');
+        }
+      },
+      error: (error: any) => {
+        this.quickWorkError = error?.error?.message || 'No se pudo generar la descarga del documento.';
+        this.cdr.detectChanges();
+      },
+    });
+  }
+
+  protected approveQuickWorkDocument(document: DocumentMetadata): void {
+    this.documentLifecycleService.approve(document.id).subscribe({
+      next: () => {
+        this.quickWorkSuccess = 'Documento aprobado.';
+        if (this.quickWorkTask) {
+          this.loadQuickWorkDocuments(this.quickWorkTask);
+        }
+      },
+      error: (error: any) => {
+        this.quickWorkError = error?.error?.message || 'No se pudo aprobar el documento.';
+        this.cdr.detectChanges();
+      },
+    });
+  }
+
+  protected rejectQuickWorkDocument(document: DocumentMetadata): void {
+    this.documentLifecycleService.reject(document.id).subscribe({
+      next: () => {
+        this.quickWorkSuccess = 'Documento rechazado.';
+        if (this.quickWorkTask) {
+          this.loadQuickWorkDocuments(this.quickWorkTask);
+        }
+      },
+      error: (error: any) => {
+        this.quickWorkError = error?.error?.message || 'No se pudo rechazar el documento.';
+        this.cdr.detectChanges();
+      },
+    });
+  }
+
+  protected quickWorkDocumentUploadError(requirement: TaskDocumentRuntimeRequirement): string {
+    return requirement.id ? this.quickWorkDocumentUploadState[requirement.id]?.error || '' : '';
+  }
+
+  protected isQuickWorkDocumentUploading(requirement: TaskDocumentRuntimeRequirement): boolean {
+    return requirement.id ? !!this.quickWorkDocumentUploadState[requirement.id]?.uploading : false;
+  }
+
+  protected documentDirectionLabel(requirement: TaskDocumentRuntimeRequirement): string {
+    return requirement.documentDirection === 'OUTPUT'
+      ? 'Documento que genera esta tarea'
+      : 'Documento que recibe esta tarea';
+  }
+
+  protected requirementStatusLabel(status?: string): string {
+    const labels: Record<string, string> = {
+      MISSING: 'Faltante obligatorio',
+      PENDING: 'Pendiente',
+      COMPLETED: 'Subido',
+      IN_REVIEW: 'En revision',
+      APPROVED: 'Aprobado',
+      REJECTED: 'Rechazado',
+    };
+    return labels[status || ''] || 'Pendiente';
+  }
+
+  protected requirementStatusClass(status?: string): string {
+    return (status || 'PENDING').toLowerCase().replace(/_/g, '-');
+  }
+
+  protected allowedTypesLabel(requirement: TaskDocumentRuntimeRequirement): string {
+    const types = requirement.allowedMimeTypes ?? [];
+    if (!types.length) {
+      return 'Tipos permitidos por el sistema';
+    }
+
+    const labels = new Set<string>();
+    for (const type of types) {
+      const normalized = type.toLowerCase();
+      if (normalized.includes('pdf')) labels.add('PDF');
+      else if (normalized.includes('word')) labels.add('Word');
+      else if (normalized.includes('excel') || normalized.includes('spreadsheet')) labels.add('Excel');
+      else if (normalized.includes('powerpoint') || normalized.includes('presentation')) labels.add('PowerPoint');
+      else if (normalized.startsWith('image/')) labels.add('Imagen');
+      else labels.add('Otros');
+    }
+
+    return Array.from(labels).join(', ');
+  }
+
+  protected formatBytes(value?: number): string {
+    if (!value || value <= 0) {
+      return 'Limite general del sistema';
+    }
+
+    const mb = value / (1024 * 1024);
+    return `${mb >= 1 ? mb.toFixed(mb % 1 === 0 ? 0 : 1) : '<1'} MB`;
+  }
+
+  protected canOpenOfficeDocument(document: DocumentMetadata, requirement: TaskDocumentRuntimeRequirement): boolean {
+    return !!document.id && !!requirement.canEdit && !!requirement.editable && this.isOfficeDocument(document);
+  }
+
+  protected isOfficeDocument(document: DocumentMetadata): boolean {
+    const mime = (document.mimeType || '').toLowerCase();
+    const name = (document.originalName || document.fileName || '').toLowerCase();
+    return mime.includes('word') || mime.includes('excel') || mime.includes('powerpoint')
+      || name.endsWith('.docx') || name.endsWith('.xlsx') || name.endsWith('.pptx');
+  }
+
+  private setQuickWorkDocumentUploadError(requirementId: string, error: string): void {
+    this.quickWorkDocumentUploadState[requirementId] = { uploading: false, error };
+    this.quickWorkError = error;
+    this.cdr.detectChanges();
+  }
+
+  private async buildQuickWorkVariablesWithUploads(): Promise<Record<string, unknown>> {
+    const variables: Record<string, unknown> = {};
+    if (!this.quickWorkForm) {
+      return variables;
+    }
+
+    for (const field of this.quickWorkForm.fields ?? []) {
+      const value = this.quickWorkValues[field.name];
+      if (value === undefined || value === null || value === '') {
+        continue;
+      }
+
+      if (field.type === 'checklist' && Array.isArray(value) && value.length === 0) {
+        continue;
+      }
+
+      if (field.type === 'file') {
+        variables[field.name] = await this.uploadQuickWorkFileValue(value as File | UploadedFileMetadata | null);
+        continue;
+      }
+
+      if (field.type === 'checklist') {
+        variables[field.name] = JSON.stringify(Array.isArray(value) ? value : []);
+        continue;
+      }
+
+      variables[field.name] = field.type === 'number'
+        ? (Number(value) || value)
+        : field.type === 'date'
+          ? String(value)
+          : value;
+    }
+
+    return variables;
+  }
+
+  private async uploadQuickWorkFileValue(value: File | UploadedFileMetadata | null): Promise<UploadedFileMetadata | null> {
+    if (!value) {
+      return null;
+    }
+
+    if (!(value instanceof File)) {
+      return value;
+    }
+
+    this.quickWorkFileState['__pending_upload__'] = { uploading: true, error: '' };
+    try {
+      const response = await firstValueFrom(this.fileUploadService.upload(value));
+      return response.data ?? {
+        publicId: '',
+        fileName: value.name,
+        secureUrl: '',
+        mimeType: value.type,
+        size: value.size,
+        resourceType: 'auto',
+      };
+    } finally {
+      delete this.quickWorkFileState['__pending_upload__'];
+    }
+  }
+
+  private getProcessKey(task: TareaInstancia): string {
+    const explicitKey = task.processKey?.trim();
+    if (explicitKey) {
+      return explicitKey;
+    }
+
+    const processId = task.processDefinitionId?.trim();
+    if (!processId) {
+      return '';
+    }
+
+    const [key] = processId.split(':');
+    return key?.trim() || '';
+  }
+
+  private getProcessVersion(task: TareaInstancia): number {
+    if (typeof task.processVersion === 'number' && Number.isFinite(task.processVersion)) {
+      return task.processVersion;
+    }
+    if (typeof task.processVersion === 'string' && task.processVersion.trim()) {
+      const explicitVersion = Number(task.processVersion.trim());
+      if (Number.isFinite(explicitVersion)) {
+        return explicitVersion;
+      }
+    }
+
+    const processId = task.processDefinitionId?.trim();
+    if (!processId) {
+      return 1;
+    }
+
+    const parts = processId.split(':');
+    if (parts.length < 2) {
+      return 1;
+    }
+
+    const version = Number(parts[1]);
+    return Number.isFinite(version) && version > 0 ? version : 1;
+  }
+
+  private showFeedback(message: string, type: 'success' | 'error'): void {
+    this.clearFeedbackTimer();
+
+    if (type === 'success') {
+      this.successMessage = message;
+      this.errorMessage = '';
+    } else {
+      this.errorMessage = message;
+      this.successMessage = '';
+    }
+
+    this.feedbackTimer = setTimeout(() => {
+      this.successMessage = '';
+      this.errorMessage = '';
+    }, 3500);
+  }
+
+  private clearFeedbackTimer(): void {
+    if (this.feedbackTimer) {
+      clearTimeout(this.feedbackTimer);
+      this.feedbackTimer = null;
+    }
+  }
+
+  private subscribeRealtimeTopics(): void {
+    const user = this.authService.currentUser();
+    if (user?.areaId) {
+      this.realtimeService.subscribeToTopic(`/topic/areas/${user.areaId}/tasks`);
+    }
+    this.realtimeService.subscribeToTopic('/topic/tasks');
+
+    this.realtimeSubscription = this.realtimeService.events$.subscribe((event) => {
+      if (
+        event.type === 'TASK_CREATED' ||
+        event.type === 'TASK_AVAILABLE' ||
+        event.type === 'TASK_CLAIMED' ||
+        event.type === 'TASK_COMPLETED'
+      ) {
+        void this.loadTasks();
+      }
+    });
+  }
+
+  private startQuickWorkVoiceCapture(): void {
+    if (!this.speechRecognitionConstructor) {
+      return;
+    }
+
+    this.stopQuickWorkVoiceCapture(true);
+    this.quickWorkVoiceError = '';
+
+    const recognition = new this.speechRecognitionConstructor();
+    recognition.lang = 'es-ES';
+    recognition.continuous = true;
+    recognition.interimResults = true;
+
+    recognition.onstart = () => {
+      this.isQuickWorkVoiceRecording = true;
+      this.quickWorkVoiceError = '';
+      this.cdr.detectChanges();
+    };
+
+    recognition.onresult = (event: BrowserSpeechRecognitionEvent) => {
+      let transcript = '';
+      for (let index = 0; index < event.results.length; index += 1) {
+        transcript += event.results[index][0]?.transcript ?? '';
+      }
+
+      this.quickWorkTranscript = transcript.trim();
+      this.cdr.detectChanges();
+    };
+
+    recognition.onerror = (event: { error?: string }) => {
+      if (event.error === 'not-allowed') {
+        this.quickWorkVoiceError = 'No se concedió permiso al micrófono. Revisa los permisos del navegador.';
+      } else if (event.error === 'no-speech') {
+        this.quickWorkVoiceError = 'No se detectó voz. Puedes volver a intentarlo.';
+      } else {
+        this.quickWorkVoiceError = 'No se pudo transcribir el audio. Intenta nuevamente.';
+      }
+
+      this.isQuickWorkVoiceRecording = false;
+      this.cdr.detectChanges();
+    };
+
+    recognition.onend = () => {
+      this.isQuickWorkVoiceRecording = false;
+      this.cdr.detectChanges();
+    };
+
+    this.speechRecognition = recognition;
+    recognition.start();
+  }
+
+  private stopQuickWorkVoiceCapture(silent = false): void {
+    if (!this.speechRecognition) {
+      this.isQuickWorkVoiceRecording = false;
+      return;
+    }
+
+    const activeRecognition = this.speechRecognition;
+    this.speechRecognition = undefined;
+    activeRecognition.onstart = null;
+    activeRecognition.onresult = null;
+    activeRecognition.onerror = null;
+    activeRecognition.onend = null;
+
+    try {
+      activeRecognition.stop();
+    } catch (error) {
+      if (!silent) {
+        console.warn('No se pudo detener el reconocimiento de voz.', error);
+      }
+    }
+
+    this.isQuickWorkVoiceRecording = false;
+  }
+
+  private getSpeechRecognitionConstructor(): SpeechRecognitionConstructor | null {
+    if (typeof window === 'undefined') {
+      return null;
+    }
+
+    const speechWindow = window as Window & {
+      SpeechRecognition?: SpeechRecognitionConstructor;
+      webkitSpeechRecognition?: SpeechRecognitionConstructor;
+    };
+
+    return speechWindow.SpeechRecognition ?? speechWindow.webkitSpeechRecognition ?? null;
+  }
+
+  private buildQuickWorkAiCurrentValues(): Record<string, unknown> {
+    const normalized: Record<string, unknown> = {};
+
+    for (const [key, value] of Object.entries(this.quickWorkValues)) {
+      if (value instanceof File) {
+        continue;
+      }
+
+      normalized[key] = value;
+    }
+
+    return normalized;
+  }
+
+  private applyQuickWorkAiSuggestions(suggestions: FormFillSuggestion[]): number {
+    if (!this.quickWorkForm) {
+      return 0;
+    }
+
+    let appliedCount = 0;
+
+    for (const suggestion of suggestions) {
+      const field = (this.quickWorkForm.fields ?? []).find((item) => item.name === suggestion.fieldName);
+      if (!field) {
+        continue;
+      }
+
+      const normalizedValue = this.normalizeQuickWorkAiValue(field, suggestion.value);
+      if (normalizedValue === undefined) {
+        continue;
+      }
+
+      this.quickWorkValues[field.name] = normalizedValue;
+      appliedCount += 1;
+    }
+
+    return appliedCount;
+  }
+
+  private normalizeQuickWorkAiValue(field: FormFieldDefinition, value: unknown): unknown {
+    if (field.type === 'file') {
+      return undefined;
+    }
+
+    if (field.type === 'checkbox') {
+      if (typeof value === 'boolean') {
+        return value;
+      }
+
+      if (typeof value === 'string') {
+        const normalized = value.trim().toLowerCase();
+        if (['true', 'si', 'sí', 'yes', '1'].includes(normalized)) {
+          return true;
+        }
+        if (['false', 'no', '0'].includes(normalized)) {
+          return false;
+        }
+      }
+
+      return undefined;
+    }
+
+    if (field.type === 'checklist') {
+      if (!Array.isArray(value)) {
+        return undefined;
+      }
+
+      const options = new Set(this.getQuickWorkFieldOptions(field).map((option) => option.value));
+      return value
+        .filter((item): item is string => typeof item === 'string' && options.has(item))
+        .map((item) => item.trim());
+    }
+
+    if (field.type === 'select') {
+      if (typeof value !== 'string') {
+        return undefined;
+      }
+
+      const options = new Set(this.getQuickWorkFieldOptions(field).map((option) => option.value));
+      return options.has(value) ? value : undefined;
+    }
+
+    if (field.type === 'number') {
+      const parsed = Number(value);
+      return Number.isFinite(parsed) ? parsed : undefined;
+    }
+
+    if (field.type === 'date') {
+      return typeof value === 'string' ? value.trim() : undefined;
+    }
+
+    if (typeof value === 'string') {
+      return value.trim();
+    }
+
+    return undefined;
+  }
+}

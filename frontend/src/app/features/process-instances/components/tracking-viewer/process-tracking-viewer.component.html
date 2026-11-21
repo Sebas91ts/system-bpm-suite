@@ -1,0 +1,20 @@
+<section class="viewer-card">
+  <div class="viewer-head">
+    <div>
+      <p class="eyebrow">{{ t('tracking.viewerHint') }}</p>
+      <h2>{{ t('tracking.viewer') }}</h2>
+    </div>
+    <div class="legend">
+      <span class="legend-item"><i class="swatch active"></i>Activa</span>
+      <span class="legend-item"><i class="swatch completed"></i>Finalizada</span>
+      <span class="legend-item"><i class="swatch pending"></i>Tareas pendientes</span>
+    </div>
+  </div>
+
+  <div class="viewer-status" *ngIf="loading">{{ t('tracking.loading') }}</div>
+  <div class="viewer-status error" *ngIf="!loading && errorMessage">{{ errorMessage }}</div>
+
+  <div class="canvas-shell" [class.hidden]="!!errorMessage">
+    <div #canvasHost class="tracking-diagram"></div>
+  </div>
+</section>

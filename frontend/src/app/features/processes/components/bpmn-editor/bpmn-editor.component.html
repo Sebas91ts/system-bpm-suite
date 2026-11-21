@@ -1,0 +1,135 @@
+<section class="collaboration-bar" *ngIf="processId">
+  <div class="collaboration-status">
+    <span class="status-pill" [class.connected]="isCollaborationConnected">
+      {{ collaborationStatusLabel }}
+    </span>
+    <span class="status-pill live" [class.readonly]="isEffectiveReadonly">
+      {{ liveModeLabel }}
+    </span>
+    <span class="autosave-state" [class.error]="saveState === 'error'" [class.saving]="saveState === 'saving'">
+      {{ autosaveStatusLabel }}
+    </span>
+  </div>
+
+  <div class="collaboration-users" aria-label="Usuarios conectados">
+    <span
+      *ngFor="let user of collaborationUsers"
+      class="user-presence"
+      [class.readonly]="user.mode === 'lectura'"
+      [title]="user.name + ' · ' + user.email + ' · ' + user.mode"
+    >
+      <span class="user-dot" [style.background]="user.color"></span>
+      <span class="user-name">{{ user.name }}</span>
+      <small>{{ user.mode }}</small>
+    </span>
+  </div>
+
+  <button
+    type="button"
+    class="save-now-button"
+    (click)="manualAutosaveNow()"
+    [disabled]="isEffectiveReadonly || isAutosaving || !processId"
+  >
+    {{ isAutosaving ? 'Guardando...' : 'Guardar ahora' }}
+  </button>
+</section>
+
+<section class="editor-surface" [class.readonly-mode]="isEffectiveReadonly">
+  <div class="canvas-wrapper">
+    <div #canvasHost class="bpmn-canvas" aria-label="Lienzo del diagrama de actividades UML 2.5"></div>
+  </div>
+
+  <aside class="properties-sidebar">
+    <div class="properties-header">
+      <p class="properties-eyebrow">Inspector UML</p>
+      <h3>Nodo o particion seleccionada</h3>
+      <p>Usa este panel para ajustar acciones, particiones, transiciones y responsabilidades del diagrama.</p>
+    </div>
+
+    <app-lane-assignment-panel
+      [selectedLaneName]="selectedLaneName"
+      [selectedLaneAreaLabel]="selectedLaneAreaLabel"
+      [selectedLaneAreaId]="selectedLaneAreaId"
+      [readonlyMode]="isEffectiveReadonly"
+      [isAreasLoading]="isAreasLoading"
+      [hasSelectedLane]="!!selectedLaneElement"
+      [activeAreas]="activeAreas"
+      [laneBindingMessage]="laneBindingMessage"
+      [areasError]="areasError"
+      (areaChange)="onLaneAreaChange($event)"
+    />
+
+    <app-sequence-flow-technical-panel
+      [visible]="!!selectedSequenceFlowElement"
+      [readonlyMode]="isEffectiveReadonly"
+      [technicalState]="selectedSequenceFlowTechnicalState"
+      [availableFields]="availableConditionFields"
+      [selectedFieldName]="selectedSequenceFlowFieldName"
+      [selectedOperator]="selectedSequenceFlowOperator"
+      [conditionValue]="selectedSequenceFlowValue"
+      [generatedExpression]="selectedSequenceFlowGeneratedExpression"
+      [defaultFlowDraft]="selectedSequenceFlowDefaultDraft"
+      [feedbackMessage]="sequenceFlowFeedbackMessage"
+      [validationMessage]="selectedSequenceFlowValidationMessage"
+      [parseWarningMessage]="selectedSequenceFlowParseWarning"
+      [fieldsLoading]="conditionFieldsLoading"
+      [fieldsError]="conditionFieldsError"
+      [emptyFieldsMessage]="conditionFieldsEmptyMessage"
+      (selectedFieldNameChange)="onSequenceFlowFieldChange($event)"
+      (selectedOperatorChange)="onSequenceFlowOperatorChange($event)"
+      (conditionValueChange)="onSequenceFlowValueChange($event)"
+      (defaultFlowDraftChange)="onSequenceFlowDefaultDraftChange($event)"
+      (applyChanges)="applySequenceFlowTechnicalChanges()"
+    />
+
+    <app-task-form-assignment-card
+      [visible]="!!selectedUserTask"
+      [selectedUserTaskLabel]="selectedUserTaskLabel"
+      [taskFormContext]="taskFormContext"
+      [readonlyMode]="isEffectiveReadonly"
+      [hasTaskForm]="hasTaskForm"
+      (configure)="openTaskFormPanel(selectedUserTask)"
+    />
+
+    <app-task-document-assignment-card
+      [visible]="!!selectedUserTask"
+      [selectedUserTaskLabel]="selectedUserTaskLabel"
+      [readonlyMode]="isEffectiveReadonly"
+      [hasDocumentConfig]="hasTaskDocumentConfig"
+      [summary]="taskDocumentSummary"
+      (configure)="openTaskDocumentPanel(selectedUserTask)"
+    />
+
+    <div #propertiesHost class="properties-panel-host" aria-label="Panel tecnico interno del diagrama"></div>
+  </aside>
+</section>
+
+<app-task-form-modal
+  [open]="taskFormPanelOpen"
+  [formLoading]="formLoading"
+  [formSaving]="formSaving"
+  [formError]="formError"
+  [formSuccess]="formSuccess"
+  [formContext]="taskFormContext"
+  [formDraft]="formDraft"
+  (close)="closeTaskFormPanel()"
+  (addField)="addFormField()"
+  (save)="saveTaskForm()"
+  (removeField)="removeFormField($event)"
+  (moveField)="onTaskFormFieldMove($event)"
+/>
+
+<app-task-document-modal
+  [open]="taskDocumentPanelOpen"
+  [loading]="documentConfigLoading"
+  [saving]="documentConfigSaving"
+  [error]="documentConfigError"
+  [success]="documentConfigSuccess"
+  [context]="taskDocumentContext"
+  [activeAreas]="activeAreas"
+  [draft]="documentConfigDraft"
+  (close)="closeTaskDocumentPanel()"
+  (save)="saveTaskDocumentConfig()"
+  (addAreaRule)="addDocumentAreaRule($event)"
+  (removeAreaRule)="removeDocumentAreaRule($event)"
+/>

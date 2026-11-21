@@ -1,0 +1,39 @@
+<section class="lane-assignment">
+  <div class="lane-assignment__header">
+    <p class="lane-assignment__eyebrow">Particion seleccionada</p>
+    <strong>{{ selectedLaneName }}</strong>
+    <span class="lane-assignment__meta">
+      {{ hasSelectedLane ? selectedLaneAreaLabel : 'Selecciona una particion para asignar un area responsable' }}
+    </span>
+  </div>
+
+  <label class="lane-assignment__field">
+    <span>Area vinculada</span>
+    <select
+      [ngModel]="selectedLaneAreaId"
+      (ngModelChange)="areaChange.emit($event)"
+      [disabled]="readonlyMode || isAreasLoading || !hasSelectedLane"
+    >
+      <option value="">Sin area asignada</option>
+      <option *ngFor="let area of activeAreas" [value]="area.id">
+        {{ area.nombre }}
+      </option>
+    </select>
+  </label>
+
+  <div class="lane-assignment__note" *ngIf="!hasSelectedLane">
+    Aun no hay una particion seleccionada. Haz click sobre una particion del diagrama para vincularle un area.
+  </div>
+
+  <div class="lane-assignment__note" *ngIf="laneBindingMessage">
+    {{ laneBindingMessage }}
+  </div>
+
+  <div class="lane-assignment__note error" *ngIf="areasError">
+    {{ areasError }}
+  </div>
+
+  <div class="lane-assignment__note" *ngIf="isAreasLoading">
+    Cargando areas responsables...
+  </div>
+</section>

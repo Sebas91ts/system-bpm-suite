@@ -1,0 +1,47 @@
+<section class="summary-card" *ngIf="tracking as item">
+  <div class="summary-head">
+    <div>
+      <p class="eyebrow">{{ t('tracking.sync') }}</p>
+      <h1>{{ item.nombreProceso || t('tracking.processUnknown') }}</h1>
+      <p class="meta">{{ versionLabel }} · {{ t('tracking.summary') }}</p>
+    </div>
+    <span [class]="stateClass(item.estado)">{{ formatState(item.estado) }}</span>
+  </div>
+
+  <div class="summary-grid">
+    <article class="info-tile emphasis">
+      <span class="label">{{ t('tasks.directWork') }}</span>
+      <strong>{{ item.currentTaskName || t('tasks.noTasks') }}</strong>
+      <small>{{ item.currentAreaNombre || t('tasks.areaUnknown') }}</small>
+    </article>
+
+    <article class="info-tile">
+      <span class="label">{{ t('tasks.assignedTo') }}</span>
+      <strong>{{ item.currentAssignedTo || t('tasks.noAssignment') }}</strong>
+      <small>{{ item.activeTasks.length }} {{ t('tracking.activeTasks') }}</small>
+    </article>
+
+    <article class="info-tile">
+      <span class="label">{{ t('tracking.completedTasks') }}</span>
+      <strong>{{ item.completedTaskKeys.length }}</strong>
+      <small>{{ t('tracking.timeline') }}</small>
+    </article>
+
+    <article class="info-tile">
+      <span class="label">{{ t('tracking.pendingTasks') }}</span>
+      <strong>{{ item.pendingTaskKeys.length }}</strong>
+      <small>{{ t('tracking.viewerHint') }}</small>
+    </article>
+  </div>
+
+  <div class="active-list" *ngIf="item.activeTasks.length">
+    <p class="section-title">{{ t('tracking.activeTasks') }}</p>
+    <div class="task-chip-list">
+      <div class="task-chip" *ngFor="let task of item.activeTasks">
+        <strong>{{ task.taskName || task.taskDefinitionKey || t('tasks.taskTitle') }}</strong>
+        <span>{{ task.areaNombre || t('tasks.areaUnknown') }}</span>
+        <small>{{ task.assignedTo || t('tasks.noAssignment') }}</small>
+      </div>
+    </div>
+  </div>
+</section>

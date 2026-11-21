@@ -1,0 +1,431 @@
+<section class="task-detail-shell">
+  <header class="task-detail-hero">
+    <div>
+      <p class="task-detail-eyebrow">{{ t('taskDetail.title') }}</p>
+      <h1>{{ task?.name || t('taskDetail.noTaskName') }}</h1>
+      <p class="task-detail-copy">{{ t('taskDetail.subtitle') }}</p>
+    </div>
+
+    <div class="task-detail-actions">
+      <button type="button" class="toolbar-button" (click)="goBack()">{{ t('taskDetail.back') }}</button>
+      <button type="button" class="toolbar-button" (click)="goToTracking()" [disabled]="!task?.processInstanceId">
+        {{ t('taskDetail.viewTracking') }}
+      </button>
+      <button
+        type="button"
+        class="toolbar-button accent"
+        (click)="openPlaceholderAction()"
+        [disabled]="!task || isCompleting || !canCompleteTask || (hasForm && !isFormValid) || hasMissingRequiredDocuments"
+      >
+        {{ isCompleting ? t('taskDetail.actionSending') : t('taskDetail.actionSend') }}
+      </button>
+      <button type="button" class="toolbar-button" (click)="toggleTechnicalDetails()" [disabled]="!task">
+        {{ showTechnicalDetails ? t('taskDetail.hideTechnical') : t('taskDetail.showTechnical') }}
+      </button>
+    </div>
+  </header>
+
+  <div class="task-detail-banner success" *ngIf="successMessage">{{ successMessage }}</div>
+  <div class="task-detail-banner error" *ngIf="errorMessage">{{ errorMessage }}</div>
+  <div class="task-detail-banner success" *ngIf="taskActionHint && task && !errorMessage">{{ taskActionHint }}</div>
+  <div class="task-detail-banner success" *ngIf="isLoading">{{ t('taskDetail.loading') }}</div>
+
+  <section class="task-detail-card" *ngIf="task">
+    <div class="task-detail-row">
+      <span>{{ t('taskDetail.name') }}</span>
+      <strong>{{ task.name || t('taskDetail.noTaskName') }}</strong>
+    </div>
+    <div class="task-detail-row">
+      <span>{{ t('taskDetail.process') }}</span>
+      <strong>{{ getProcessLabel() }}</strong>
+    </div>
+    <div class="task-detail-row">
+      <span>{{ t('taskDetail.area') }}</span>
+      <strong>{{ getAreaLabel() }}</strong>
+    </div>
+    <div class="task-detail-row">
+      <span>{{ t('taskDetail.assignedTo') }}</span>
+      <strong>{{ task.assignee || t('taskDetail.noAssignment') }}</strong>
+    </div>
+    <div class="task-detail-row">
+      <span>{{ t('taskDetail.state') }}</span>
+      <strong><span class="task-status-badge">{{ t('tracking.activeState') }}</span></strong>
+    </div>
+    <div class="task-detail-row">
+      <span>{{ t('taskDetail.created') }}</span>
+      <strong>{{ formatDate(task.created) }}</strong>
+    </div>
+    <div class="task-detail-row">
+      <span>{{ t('taskDetail.tracking') }}</span>
+      <strong>{{ getProcessLabel() }}</strong>
+    </div>
+    <div class="task-detail-technical" *ngIf="showTechnicalDetails">
+      <div class="task-detail-row">
+        <span>{{ t('taskDetail.technicalProcess') }}</span>
+        <strong>{{ task.processDefinitionId || t('taskDetail.noProcessLabel') }}</strong>
+      </div>
+      <div class="task-detail-row">
+        <span>{{ t('taskDetail.technicalInstance') }}</span>
+        <strong>{{ task.processInstanceId || t('taskDetail.noInstance') }}</strong>
+      </div>
+      <div class="task-detail-row">
+        <span>{{ t('taskDetail.taskKey') }}</span>
+        <strong>{{ task.taskDefinitionKey || t('taskDetail.noDetail') }}</strong>
+      </div>
+    </div>
+  </section>
+
+  <section class="task-detail-card" *ngIf="task">
+    <div class="task-detail-row">
+      <span>{{ t('taskDetail.form') }}</span>
+      <strong>{{ hasForm ? (formDefinition?.title || t('taskDetail.form')) : t('taskDetail.noForm') }}</strong>
+    </div>
+
+    <div class="task-detail-form-message" *ngIf="formLoading">{{ t('taskDetail.loadingForm') }}</div>
+
+    <div class="task-detail-form-message" *ngIf="formMessage && !formLoading">
+      {{ formMessage }}
+    </div>
+
+    <section class="task-assistant-card" *ngIf="hasForm && !formLoading">
+      <div class="task-assistant-card__header">
+        <div>
+          <p class="task-assistant-card__eyebrow">Asistente IA</p>
+          <h3>Dicta la información y deja que la IA complete el formulario</h3>
+          <p>
+            El funcionario puede hablar, revisar la transcripción y luego pedir sugerencias antes de enviar la tarea.
+          </p>
+        </div>
+        <button
+          type="button"
+          class="task-assistant-card__mic"
+          [class.task-assistant-card__mic--recording]="isVoiceRecording"
+          (click)="toggleVoiceCapture()"
+          [disabled]="isAiFormFilling || !isVoiceInputSupported"
+        >
+          {{ isVoiceRecording ? 'Detener micrófono' : 'Usar micrófono' }}
+        </button>
+      </div>
+
+      <p class="task-assistant-card__hint" *ngIf="isVoiceInputSupported">
+        {{ isVoiceRecording ? 'Escuchando en tiempo real. Cuando termines, detén el micrófono y revisa el texto.' : 'Puedes editar la transcripción antes de pedir el autollenado con IA.' }}
+      </p>
+      <p class="task-assistant-card__hint task-assistant-card__hint--warning" *ngIf="!isVoiceInputSupported">
+        Tu navegador no soporta reconocimiento de voz en esta pantalla. Aun así puedes escribir la transcripción manualmente.
+      </p>
+      <p class="task-assistant-card__error" *ngIf="aiVoiceErrorMessage">{{ aiVoiceErrorMessage }}</p>
+
+      <textarea
+        class="task-assistant-card__transcript"
+        rows="5"
+        [ngModel]="aiTranscript"
+        (ngModelChange)="aiTranscript = $event"
+        [ngModelOptions]="{ standalone: true }"
+        placeholder="Ej. Mi nombre es Juan Perez, solicito viáticos para viaje a La Paz, salida el 2026-05-03..."
+      ></textarea>
+
+      <div class="task-assistant-card__actions">
+        <button
+          type="button"
+          class="toolbar-button"
+          (click)="aiTranscript = ''; aiFormSummary = ''; aiFilledFieldsCount = 0"
+          [disabled]="isAiFormFilling"
+        >
+          Limpiar
+        </button>
+        <button
+          type="button"
+          class="toolbar-button accent"
+          (click)="suggestFormWithAi()"
+          [disabled]="isAiFormFilling || !aiTranscript.trim()"
+        >
+          {{ isAiFormFilling ? 'Sugiriendo...' : 'Sugerir con IA' }}
+        </button>
+      </div>
+
+      <div class="task-assistant-card__summary" *ngIf="aiFormSummary">
+        <strong>Resultado IA</strong>
+        <p>{{ aiFormSummary }}</p>
+        <span *ngIf="aiFilledFieldsCount">Campos completados: {{ aiFilledFieldsCount }}</span>
+      </div>
+    </section>
+
+    <form class="task-detail-form" *ngIf="hasForm && !formLoading">
+      <div class="task-detail-form__field" *ngFor="let field of formDefinition?.fields || []">
+        <label>
+          <span>
+            {{ field.label || field.name || t('taskDetail.fieldUnnamed') }}
+            <strong *ngIf="field.required">*</strong>
+          </span>
+
+          <ng-container [ngSwitch]="field.type">
+            <input
+              *ngSwitchCase="'text'"
+              type="text"
+              [ngModel]="getFieldValue(field)"
+              (ngModelChange)="setFieldValue(field.name, $event)"
+              [ngModelOptions]="{ standalone: true }"
+              [required]="field.required"
+              [placeholder]="field.placeholder || ''"
+            />
+            <textarea
+              *ngSwitchCase="'textarea'"
+              [ngModel]="getFieldValue(field)"
+              (ngModelChange)="setFieldValue(field.name, $event)"
+              [ngModelOptions]="{ standalone: true }"
+              [required]="field.required"
+              [placeholder]="field.placeholder || ''"
+            ></textarea>
+            <input
+              *ngSwitchCase="'number'"
+              type="number"
+              [ngModel]="getFieldValue(field)"
+              (ngModelChange)="setFieldValue(field.name, $event)"
+              [ngModelOptions]="{ standalone: true }"
+              [required]="field.required"
+              [placeholder]="field.placeholder || ''"
+            />
+            <input
+              *ngSwitchCase="'date'"
+              type="date"
+              [ngModel]="getFieldValue(field)"
+              (ngModelChange)="setFieldValue(field.name, $event)"
+              [ngModelOptions]="{ standalone: true }"
+              [required]="field.required"
+              [placeholder]="field.placeholder || ''"
+            />
+            <select
+              *ngSwitchCase="'select'"
+              [ngModel]="getFieldValue(field)"
+              (ngModelChange)="setFieldValue(field.name, $event)"
+              [ngModelOptions]="{ standalone: true }"
+              [required]="field.required"
+            >
+              <option value="">{{ t('taskDetail.selectOption') }}</option>
+              <option *ngFor="let option of getFieldOptions(field)" [value]="option.value">{{ option.label }}</option>
+            </select>
+            <label *ngSwitchCase="'checkbox'" class="task-detail-choice">
+              <input
+                type="checkbox"
+                [checked]="getFieldValue(field) === true"
+                (change)="setFieldValue(field.name, ($any($event.target)).checked)"
+              />
+              <span>{{ field.helpText || t('taskDetail.checkboxHint') }}</span>
+            </label>
+            <div *ngSwitchCase="'checklist'" class="task-detail-checklist">
+              <label class="task-detail-choice" *ngFor="let option of getFieldOptions(field)">
+                <input
+                  type="checkbox"
+                  [checked]="isChecklistOptionSelected(field.name, option.value)"
+                  (change)="toggleChecklistValue(field.name, option.value, $any($event.target).checked)"
+                />
+                <span>{{ option.label }}</span>
+              </label>
+            </div>
+            <div *ngSwitchCase="'file'" class="task-detail-file">
+              <input type="file" (change)="onFileSelected(field, $event)" />
+              <div class="task-detail-file__state" *ngIf="getSelectedFile(field.name)">
+                {{ t('taskDetail.fileSelected') }} {{ getSelectedFileName(field.name) }}
+              </div>
+              <div class="task-detail-file__state" *ngIf="!getSelectedFile(field.name)">
+                {{ t('taskDetail.fileValidation') }}
+              </div>
+              <div class="task-detail-file__state success" *ngIf="getFieldFile(field)">
+                {{ t('taskDetail.fileUploaded') }} {{ getFieldFile(field)?.fileName }}
+                <a *ngIf="getFieldFile(field)?.secureUrl" [href]="getFieldFile(field)?.secureUrl" target="_blank" rel="noopener">{{ t('taskDetail.view') }}</a>
+              </div>
+              <div class="task-detail-file__state error" *ngIf="fileUploadError(field)">
+                {{ fileUploadError(field) }}
+              </div>
+            </div>
+          </ng-container>
+
+          <small *ngIf="field.helpText">{{ field.helpText }}</small>
+          <small class="task-detail-form__error" *ngIf="isFieldMissing(field)">{{ t('taskDetail.required') }}</small>
+        </label>
+      </div>
+    </form>
+  </section>
+
+  <section class="task-detail-card task-documents-card" *ngIf="task">
+    <div class="task-documents-card__header">
+      <div>
+        <p class="task-detail-eyebrow">Documentos de la tarea</p>
+        <h2>Formulario y documentos en una sola tarea BPM</h2>
+        <p>
+          Adjunta, revisa o edita los documentos requeridos antes de completar la tarea.
+        </p>
+      </div>
+      <div class="task-documents-summary" *ngIf="documentRuntime?.summary as summary">
+        <strong>{{ summary.completed }}/{{ summary.total }}</strong>
+        <span>completados</span>
+      </div>
+    </div>
+
+    <div class="task-detail-form-message" *ngIf="documentsLoading">Cargando documentos de la tarea...</div>
+    <div class="task-detail-form-message" *ngIf="documentsMessage && !documentsLoading">{{ documentsMessage }}</div>
+
+    <div class="task-document-grid" *ngIf="hasDocumentRequirements && !documentsLoading">
+      <article
+        class="task-document-card"
+        *ngFor="let requirement of documentRuntime?.requirements || []"
+        [class.is-missing]="requirement.status === 'MISSING'"
+      >
+        <header class="task-document-card__header">
+          <div>
+            <span class="task-document-direction">{{ documentDirectionLabel(requirement) }}</span>
+            <h3>{{ requirement.name }}</h3>
+            <p *ngIf="requirement.description">{{ requirement.description }}</p>
+          </div>
+          <span class="task-document-status" [class]="requirementStatusClass(requirement.status)">
+            {{ requirementStatusLabel(requirement.status) }}
+          </span>
+        </header>
+
+        <div class="task-document-rules">
+          <span *ngIf="requirement.required">Obligatorio</span>
+          <span *ngIf="requirement.editable">OnlyOffice</span>
+          <span *ngIf="requirement.requireApproval">Requiere aprobacion</span>
+          <span *ngIf="requirement.readOnlyAfterComplete">Solo lectura al avanzar</span>
+        </div>
+
+        <div class="task-document-meta">
+          <span>{{ allowedTypesLabel(requirement) }}</span>
+          <span>{{ formatBytes(requirement.maxFileSizeBytes) }}</span>
+          <span>Max. {{ requirement.maxFiles || 1 }} archivo(s)</span>
+        </div>
+
+        <p class="task-document-card__message">{{ requirement.message }}</p>
+
+        <div class="task-document-upload" *ngIf="requirement.canUpload; else noUploadPermission">
+          <label>
+            <span>{{ isDocumentUploading(requirement) ? 'Subiendo...' : 'Subir documento' }}</span>
+            <input
+              type="file"
+              [accept]="(requirement.allowedMimeTypes || []).join(',')"
+              (change)="onTaskDocumentSelected(requirement, $event)"
+              [disabled]="isDocumentUploading(requirement)"
+            />
+          </label>
+          <small class="task-detail-form__error" *ngIf="documentUploadError(requirement)">
+            {{ documentUploadError(requirement) }}
+          </small>
+        </div>
+
+        <ng-template #noUploadPermission>
+          <div class="task-document-no-permission">
+            Tu area no tiene permiso para subir este documento.
+          </div>
+        </ng-template>
+
+        <div class="task-document-files" *ngIf="requirement.documents?.length; else noRequirementDocuments">
+          <article class="task-document-file" *ngFor="let document of requirement.documents">
+            <div>
+              <strong>{{ document.originalName || document.fileName }}</strong>
+              <span>{{ document.uploadedBy }} · {{ formatDate(document.uploadedAt) }}</span>
+            </div>
+            <div class="task-document-file__actions">
+              <button
+                type="button"
+                class="toolbar-button"
+                (click)="openTaskDocumentEditor(document)"
+                [disabled]="!canOpenOfficeDocument(document, requirement)"
+              >
+                OnlyOffice
+              </button>
+              <button
+                type="button"
+                class="toolbar-button"
+                (click)="downloadTaskDocument(document)"
+                [disabled]="!requirement.canDownload"
+              >
+                Descargar
+              </button>
+              <button
+                type="button"
+                class="toolbar-button"
+                (click)="approveTaskDocument(document)"
+                *ngIf="requirement.canApprove"
+              >
+                Aprobar
+              </button>
+              <button
+                type="button"
+                class="toolbar-button danger"
+                (click)="rejectTaskDocument(document)"
+                *ngIf="requirement.canReject"
+              >
+                Rechazar
+              </button>
+            </div>
+          </article>
+        </div>
+
+        <ng-template #noRequirementDocuments>
+          <div class="task-document-empty">
+            {{ requirement.required ? 'Este documento es obligatorio y aun no fue adjuntado.' : 'Aun no hay archivos para este documento.' }}
+          </div>
+        </ng-template>
+      </article>
+    </div>
+  </section>
+
+  <section class="task-detail-card" *ngIf="task">
+    <div class="task-detail-row">
+      <span>{{ t('taskDetail.history') }}</span>
+      <strong>{{ historyAvailable ? (historyEntries.length + ' ' + t('taskDetail.historyCount')) : t('taskDetail.noHistory') }}</strong>
+    </div>
+
+    <div class="task-detail-form-message" *ngIf="historyLoading">{{ t('taskDetail.loadingHistory') }}</div>
+
+    <div class="task-detail-form-message" *ngIf="historyMessage && !historyLoading">
+      {{ historyMessage }}
+    </div>
+
+    <div class="task-history" *ngIf="historyAvailable && !historyLoading">
+      <article class="task-history__item" *ngFor="let entry of historyEntries">
+        <div class="task-history__dot" aria-hidden="true"></div>
+        <div class="task-history__content">
+          <div class="task-history__header">
+            <div>
+              <h3>{{ getHistoryTaskLabel(entry) }}</h3>
+              <p>
+                {{ getHistoryUserLabel(entry) }}
+                <span *ngIf="entry.areaNombre">| {{ entry.areaNombre }}</span>
+              </p>
+            </div>
+            <strong>{{ formatDate(entry.completedAt) }}</strong>
+          </div>
+
+          <div class="task-history__fields" *ngIf="getHistoryFields(entry).length; else noHistoryData">
+            <div class="task-history__field" *ngFor="let field of getHistoryFields(entry)">
+              <span>{{ field.label }}</span>
+              <ng-container *ngIf="field.isFile; else textHistoryValue">
+                <a *ngIf="field.file?.secureUrl; else missingFileUrl" [href]="field.file?.secureUrl" target="_blank" rel="noopener">
+                  {{ field.value }}
+                </a>
+                <ng-template #missingFileUrl>
+                  <strong>{{ field.value }}</strong>
+                </ng-template>
+              </ng-container>
+              <ng-template #textHistoryValue>
+                <strong>{{ field.value }}</strong>
+              </ng-template>
+            </div>
+          </div>
+
+          <ng-template #noHistoryData>
+            <p class="task-history__empty">{{ t('taskDetail.historyEmpty') }}</p>
+          </ng-template>
+        </div>
+      </article>
+    </div>
+  </section>
+
+  <section class="task-detail-card" *ngIf="!task && !isLoading && !errorMessage">
+    <div class="task-detail-row">
+      <span>{{ t('taskDetail.state') }}</span>
+      <strong>{{ t('taskDetail.noDetail') }}</strong>
+    </div>
+  </section>
+</section>

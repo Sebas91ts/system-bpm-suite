@@ -1,0 +1,211 @@
+<main class="ai-review-shell">
+  <section class="review-hero">
+    <div>
+      <p class="eyebrow">Recomendaciones IA</p>
+      <h1>Analisis inteligente de procesos</h1>
+      <p>
+        Revisa riesgos, cuellos de botella y sugerencias detectadas por IA en procesos publicados o analizados desde el editor.
+      </p>
+    </div>
+
+    <div class="hero-actions">
+      <button type="button" class="ghost-button" (click)="goBack()">Volver</button>
+      <button type="button" class="primary-button" (click)="refresh()" [disabled]="isLoading">
+        {{ isLoading ? 'Cargando...' : 'Actualizar' }}
+      </button>
+    </div>
+  </section>
+
+  <section class="feedback" *ngIf="isLoading">Cargando recomendaciones IA...</section>
+  <section class="feedback feedback--error" *ngIf="errorMessage && !isLoading">{{ errorMessage }}</section>
+  <section class="feedback" *ngIf="actionMessage && !isLoading" [ngClass]="'feedback--' + actionMessageType">
+    {{ actionMessage }}
+  </section>
+
+  <section class="filters-card" *ngIf="!isLoading">
+    <div class="filters-card__top">
+      <div>
+        <p class="eyebrow">Filtros</p>
+        <h2>{{ filteredCountLabel() }}</h2>
+      </div>
+
+      <label class="switch">
+        <input type="checkbox" [(ngModel)]="showReviewedAnalyses" [ngModelOptions]="{ standalone: true }" (change)="applyFilters()" />
+        <span class="switch__track">
+          <span class="switch__thumb"></span>
+        </span>
+        <span class="switch__label">{{ showReviewedAnalyses ? 'Mostrando revisadas' : 'Solo no revisadas' }}</span>
+      </label>
+    </div>
+
+    <div class="filters-grid">
+      <label class="filter-field">
+        <span>Estado</span>
+        <select [(ngModel)]="statusFilter" [ngModelOptions]="{ standalone: true }" (change)="applyFilters()" [disabled]="!showReviewedAnalyses">
+          <option value="ALL">Todos</option>
+          <option value="NEW">Nuevos</option>
+          <option value="REVIEWED">Revisados</option>
+          <option value="IGNORED">Ignorados</option>
+          <option value="APPLIED">Aplicados</option>
+        </select>
+      </label>
+
+      <label class="filter-field">
+        <span>Score menor o igual a</span>
+        <input
+          type="number"
+          min="0"
+          max="100"
+          [(ngModel)]="maxScoreFilter"
+          [ngModelOptions]="{ standalone: true }"
+          (ngModelChange)="applyFilters()"
+          placeholder="Ej. 70"
+        />
+      </label>
+
+      <label class="filter-field">
+        <span>Desde</span>
+        <input type="date" [(ngModel)]="dateFromFilter" [ngModelOptions]="{ standalone: true }" (change)="applyFilters()" />
+      </label>
+
+      <label class="filter-field">
+        <span>Hasta</span>
+        <input type="date" [(ngModel)]="dateToFilter" [ngModelOptions]="{ standalone: true }" (change)="applyFilters()" />
+      </label>
+
+      <button type="button" class="ghost-button" (click)="showReviewedAnalyses = false; statusFilter = 'ALL'; maxScoreFilter = null; dateFromFilter = ''; dateToFilter = ''; applyFilters()">
+        Limpiar filtros
+      </button>
+    </div>
+  </section>
+
+  <section class="empty-state" *ngIf="!isLoading && !analyses.length && !errorMessage">
+    <strong>No hay recomendaciones pendientes.</strong>
+    <p>Cuando la IA detecte riesgos relevantes, apareceran aqui para que el administrador los revise.</p>
+  </section>
+
+  <section class="empty-state" *ngIf="!isLoading && analyses.length && !filteredAnalyses.length && !errorMessage">
+    <strong>No hay resultados con estos filtros.</strong>
+    <p>Prueba ampliar el rango de fecha, bajar el score o mostrar recomendaciones ya revisadas.</p>
+  </section>
+
+  <section class="analysis-grid" *ngIf="!isLoading && filteredAnalyses.length">
+    <article class="analysis-card" *ngFor="let analysis of filteredAnalyses; trackBy: trackAnalysis">
+      <div class="analysis-card__top">
+        <div>
+          <span class="status-pill">{{ analysis.status || 'NEW' }}</span>
+          <h2>{{ analysis.processName || analysis.processKey || 'Proceso sin nombre' }}</h2>
+          <p>{{ analysis.processKey }} · v{{ analysis.processVersion || 1 }} · {{ formatDate(analysis.createdAt) }}</p>
+        </div>
+
+        <div class="score-badge" [ngClass]="'score-badge--' + scoreTone(analysis.score)">
+          <span>Score</span>
+          <strong>{{ analysis.score }}/100</strong>
+        </div>
+      </div>
+
+      <p class="summary">{{ analysis.summary }}</p>
+
+      <section class="detail-block">
+        <h3>Problemas</h3>
+        <p class="muted" *ngIf="!analysis.issues.length">Sin problemas relevantes.</p>
+        <div class="issue-row" *ngFor="let issue of analysis.issues">
+          <span class="severity" [ngClass]="'severity--' + issue.severity">{{ severityLabel(issue.severity) }}</span>
+          <div>
+            <strong>{{ issue.type }}</strong>
+            <p>{{ issue.description }}</p>
+            <small *ngIf="issue.elementId">Elemento: {{ issue.elementId }}</small>
+          </div>
+        </div>
+      </section>
+
+      <section class="detail-block">
+        <h3>Sugerencias</h3>
+        <p class="muted" *ngIf="!analysis.suggestions.length">Sin sugerencias pendientes.</p>
+        <div class="suggestion-row" *ngFor="let suggestion of analysis.suggestions">
+          <div class="suggestion-row__content">
+            <div class="suggestion-row__header">
+              <strong>{{ suggestion.title }}</strong>
+              <span class="status-pill status-pill--suggestion" [ngClass]="'status-pill--' + (suggestion.status || 'pending').toLowerCase()">
+                {{ suggestion.status || 'PENDING' }}
+              </span>
+            </div>
+            <p>{{ suggestion.description }}</p>
+            <small>{{ suggestion.impact }}</small>
+
+            <div class="suggestion-row__meta">
+              <span *ngIf="suggestion.proposedXml" class="meta-chip meta-chip--success">XML propuesto disponible</span>
+              <span *ngIf="suggestion.canBeAppliedAutomatically" class="meta-chip meta-chip--info">Aplicable automaticamente</span>
+              <span *ngIf="!suggestion.canBeAppliedAutomatically" class="meta-chip">Requiere revision manual</span>
+            </div>
+          </div>
+
+          <div class="suggestion-row__actions">
+            <button type="button" class="ghost-button" (click)="openDecisionModal(suggestion, 'reject')" [disabled]="suggestion.status === 'APPLIED' || suggestion.status === 'REJECTED'">
+              Rechazar
+            </button>
+            <button
+              type="button"
+              class="primary-button"
+              (click)="openDecisionModal(suggestion, 'apply')"
+              [disabled]="!canApplySuggestion(suggestion) || decisionLoadingId === suggestion.id"
+            >
+              {{ decisionLoadingId === suggestion.id && selectedDecision === 'apply' ? 'Aplicando...' : 'Aplicar sugerencia' }}
+            </button>
+          </div>
+        </div>
+      </section>
+
+      <div class="card-actions">
+        <button type="button" class="ghost-button" (click)="viewProcess(analysis)" [disabled]="!analysis.processId">
+          Ver proceso
+        </button>
+        <button type="button" class="ghost-button" (click)="updateStatus(analysis, 'IGNORED')" [disabled]="updatingId === analysis.id">
+          Ignorar
+        </button>
+        <button type="button" class="primary-button" (click)="updateStatus(analysis, 'REVIEWED')" [disabled]="updatingId === analysis.id">
+          {{ updatingId === analysis.id ? 'Actualizando...' : 'Marcar revisado' }}
+        </button>
+      </div>
+    </article>
+  </section>
+
+  <section class="decision-modal" *ngIf="showDecisionModal">
+    <div class="decision-modal__backdrop" (click)="closeDecisionModal()"></div>
+    <div class="decision-modal__panel" role="dialog" aria-modal="true" aria-labelledby="decision-modal-title">
+      <header class="decision-modal__header">
+        <div>
+          <p class="eyebrow">Confirmacion</p>
+          <h2 id="decision-modal-title">
+            {{ selectedDecision === 'apply' ? 'Aplicar sugerencia' : 'Rechazar sugerencia' }}
+          </h2>
+        </div>
+        <button type="button" class="decision-modal__close" (click)="closeDecisionModal()" [disabled]="!!decisionLoadingId" aria-label="Cerrar">
+          X
+        </button>
+      </header>
+
+      <div class="decision-modal__body">
+        <p>
+          Vas a {{ selectedDecision === 'apply' ? 'aplicar' : 'rechazar' }} la sugerencia:
+        </p>
+        <strong>{{ formatDecisionTitle(selectedSuggestionTitle) }}</strong>
+        <p *ngIf="selectedDecision === 'apply'">
+          El proceso se actualizara con el XML propuesto guardado en BD. Esta accion no llama otra vez a Gemini.
+        </p>
+        <p *ngIf="selectedDecision === 'reject'">
+          La sugerencia quedara marcada como rechazada para auditoria.
+        </p>
+      </div>
+
+      <div class="decision-modal__feedback" *ngIf="decisionMessage">{{ decisionMessage }}</div>
+
+      <footer class="decision-modal__actions">
+        <button type="button" class="ghost-button" (click)="closeDecisionModal()" [disabled]="!!decisionLoadingId">Cancelar</button>
+        <button type="button" class="primary-button" (click)="confirmDecision()" [disabled]="!!decisionLoadingId">
+          {{ decisionLoadingId ? 'Procesando...' : (selectedDecision === 'apply' ? 'Si, aplicar' : 'Si, rechazar') }}
+        </button>
+      </footer>
+    </div>
+  </section>
+</main>

@@ -1,0 +1,172 @@
+<section class="employee-shell">
+  <header class="workspace-hero">
+    <div class="workspace-hero__identity">
+      <div class="avatar" aria-hidden="true">{{ userInitials }}</div>
+      <div>
+        <p class="eyebrow">{{ t('user.center') }}</p>
+        <h1>{{ t('user.greeting') }}, {{ displayName }}</h1>
+        <p class="hero-copy">{{ t('user.hero') }}</p>
+      </div>
+    </div>
+
+    <div class="workspace-hero__actions">
+      <app-notification-bell />
+      <button type="button" class="ghost-button" (click)="goToStartableProcesses()">
+        Procesos iniciables
+      </button>
+      <button type="button" class="ghost-button" (click)="goToDocuments()">
+        Repositorio documental
+      </button>
+      <button type="button" class="ghost-button" (click)="goToEnterpriseAi()">
+        Centro IA BPM
+      </button>
+      <button type="button" class="ghost-button" (click)="refresh()" [disabled]="isLoading">
+        {{ isLoading ? t('user.updating') : t('user.refresh') }}
+      </button>
+      <button type="button" class="danger-button" (click)="logout()">{{ t('user.logout') }}</button>
+      <div class="workspace-hero__more">
+        <button type="button" class="icon-button" (click)="toggleSettingsMenu()" aria-label="Más opciones">⋯</button>
+        <div class="more-menu" *ngIf="isSettingsMenuOpen">
+          <button type="button" class="more-menu__item" (click)="openSettings()">
+            Ajustes
+          </button>
+          <button type="button" class="more-menu__item" (click)="closeSettingsMenu()">
+            Cerrar menú
+          </button>
+        </div>
+      </div>
+    </div>
+  </header>
+
+  <section class="profile-strip">
+    <article class="profile-card">
+      <span class="profile-card__label">{{ t('user.role') }}</span>
+      <strong>{{ roleLabel }}</strong>
+    </article>
+    <article class="profile-card">
+      <span class="profile-card__label">{{ t('user.area') }}</span>
+      <strong>{{ areaLabel }}</strong>
+    </article>
+    <article class="profile-card">
+      <span class="profile-card__label">{{ t('user.email') }}</span>
+      <strong>{{ user()?.email || 'Sin correo' }}</strong>
+    </article>
+    <article class="profile-card">
+      <span class="profile-card__label">{{ t('user.sync') }}</span>
+      <strong>{{ lastUpdatedLabel }}</strong>
+    </article>
+  </section>
+
+  <div class="workspace-alert error" *ngIf="errorMessage">{{ errorMessage }}</div>
+  <div class="workspace-alert info" *ngIf="isLoading && !errorMessage">{{ t('user.loading') }}</div>
+
+  <section class="workload-card" [class.workload-card--attention]="workloadStatus === 'attention'">
+    <div>
+      <p class="eyebrow">{{ t('user.workload') }}</p>
+      <h2>{{ workloadTitle }}</h2>
+      <p>{{ workloadDescription }}</p>
+    </div>
+    <div class="workload-card__actions">
+      <button type="button" class="primary-button" (click)="goToMyTasks()">{{ t('user.viewMine') }}</button>
+      <button type="button" class="secondary-button" (click)="goToAreaTasks()">{{ t('user.viewArea') }}</button>
+    </div>
+  </section>
+
+  <section class="metric-grid" aria-label="Resumen de tareas">
+    <article class="metric-card" *ngFor="let metric of metrics" [class]="'metric-card metric-card--' + metric.tone">
+      <span>{{ metric.label }}</span>
+      <strong>{{ metric.value }}</strong>
+      <p>{{ metric.hint }}</p>
+    </article>
+  </section>
+
+  <section class="workspace-grid">
+    <article class="panel-card task-preview">
+      <div class="panel-card__head">
+        <div>
+          <p class="eyebrow">{{ t('user.priority') }}</p>
+          <h2>{{ t('user.priorityTitle') }}</h2>
+        </div>
+        <span class="count-badge">{{ priorityTasks.length }}</span>
+      </div>
+
+      <div class="empty-state" *ngIf="!isLoading && priorityTasks.length === 0">
+        <strong>{{ t('user.emptyTitle') }}</strong>
+        <p>{{ t('user.emptyDescription') }}</p>
+      </div>
+
+      <div class="task-list" *ngIf="priorityTasks.length">
+        <button type="button" class="task-row" *ngFor="let task of priorityTasks; trackBy: trackTask" (click)="openTask(task)">
+          <span class="task-row__icon" aria-hidden="true"></span>
+          <span class="task-row__main">
+            <strong>{{ getTaskName(task) }}</strong>
+            <small>{{ getProcessName(task) }} - {{ task.areaNombre || areaLabel }}</small>
+          </span>
+          <span [class]="getTaskBadgeClass(task)">{{ getTaskBadge(task) }}</span>
+          <time>{{ formatDate(task.created) }}</time>
+        </button>
+      </div>
+    </article>
+
+    <aside class="panel-card guidance-card">
+      <p class="eyebrow">{{ t('user.recommendation') }}</p>
+      <h2>{{ t('user.guidanceTitle') }}</h2>
+      <ol>
+        <li>{{ t('user.guidanceStepOne') }}</li>
+        <li>{{ t('user.guidanceStepTwo') }}</li>
+        <li>{{ t('user.guidanceStepThree') }}</li>
+      </ol>
+      <button type="button" class="secondary-button full-width" (click)="goToAreaTasks()">
+        {{ t('user.claimAvailable') }}
+      </button>
+    </aside>
+  </section>
+
+  <button type="button" class="assistant-launcher" (click)="openAssistant()" aria-label="Abrir asistente">
+    <span class="assistant-launcher__icon">?</span>
+    <span class="assistant-launcher__text">Ayuda IA</span>
+  </button>
+
+  <section class="assistant-modal" *ngIf="isAssistantOpen">
+    <div class="assistant-modal__backdrop" (click)="closeAssistant()"></div>
+    <div class="assistant-modal__panel" role="dialog" aria-modal="true" aria-labelledby="assistant-title">
+      <header class="assistant-modal__header">
+        <div>
+          <p class="eyebrow">Asistente interno</p>
+          <h2 id="assistant-title">Consulta tu sistema BPM</h2>
+        </div>
+        <button type="button" class="icon-button" (click)="closeAssistant()" [disabled]="assistantLoading" aria-label="Cerrar asistente">×</button>
+      </header>
+
+      <div class="assistant-modal__messages">
+        <article
+          class="assistant-message"
+          *ngFor="let message of assistantMessages"
+          [class.assistant-message--user]="message.role === 'user'"
+          [class.assistant-message--bot]="message.role === 'assistant'"
+        >
+          {{ message.text }}
+        </article>
+        <div class="assistant-message assistant-message--bot" *ngIf="assistantLoading">
+          Pensando...
+        </div>
+      </div>
+
+      <div class="assistant-modal__error" *ngIf="assistantError">{{ assistantError }}</div>
+
+      <footer class="assistant-modal__footer">
+        <input
+          type="text"
+          [(ngModel)]="assistantInput"
+          [ngModelOptions]="{ standalone: true }"
+          placeholder="Escribe una duda sobre el sistema..."
+          (keydown.enter)="sendAssistantMessage()"
+          [disabled]="assistantLoading"
+        />
+        <button type="button" class="primary-button" (click)="sendAssistantMessage()" [disabled]="assistantLoading || !assistantInput.trim()">
+          {{ assistantLoading ? 'Consultando...' : 'Preguntar' }}
+        </button>
+      </footer>
+    </div>
+  </section>
+</section>

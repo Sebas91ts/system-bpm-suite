@@ -1,0 +1,372 @@
+﻿<section class="designer-shell">
+  <header class="header">Diseñador UML 2.5</header>
+
+  <div class="workspace">
+    <aside class="sidebar">
+      <button
+        type="button"
+        class="toolbar-button"
+        title="Volver a la lista de procesos"
+        (click)="goBackToProcesses()"
+      >
+        Volver
+      </button>
+
+      <button
+        type="button"
+        class="toolbar-button accent"
+        [title]="currentProcessId ? 'Actualizar proceso en el backend' : 'Guardar proceso en el backend'"
+        (click)="openSaveCurrent()"
+        [disabled]="isBusy || isSaving || isLoadingProcess || isReadonlyProcess || !currentProcessId"
+      >
+        {{ isSaving ? 'Guardando...' : (currentProcessId ? 'Actualizar' : 'Guardar') }}
+      </button>
+
+      <button
+        type="button"
+        class="toolbar-button"
+        title="Importar diagrama UML"
+        (click)="toggleImportPanel()"
+        [disabled]="isBusy || isLoadingProcess || isReadonlyProcess || !currentProcessId"
+      >
+        {{ isImportPanelOpen ? 'Ocultar' : 'Importar' }}
+      </button>
+
+      <button
+        type="button"
+        class="toolbar-button accent"
+        title="Editar o crear diagrama UML con IA sobre el lienzo actual"
+        (click)="openAiEditGenerator()"
+        [disabled]="isBusy || isSaving || isLoadingProcess || isAiAnalyzing || isReadonlyProcess || !currentProcessId"
+      >
+        IA UML
+      </button>
+
+      <button
+        type="button"
+        class="toolbar-button ai-analysis-button"
+        title="Analizar optimizacion, riesgos y cuellos de botella del diagrama actual"
+        (click)="analyzeProcessWithAi()"
+        [disabled]="isBusy || isSaving || isLoadingProcess || isAiAnalyzing || !currentProcessId"
+      >
+        {{ isAiAnalyzing ? 'Analizando...' : 'Analizar IA' }}
+      </button>
+
+      <button
+        type="button"
+        class="toolbar-button"
+        title="Exportar diagrama UML"
+        (click)="onExportXml()"
+        [disabled]="isBusy || isLoadingProcess || !currentProcessId"
+      >
+        Exportar
+      </button>
+
+      <button type="button" class="toolbar-icon" title="Alejar" (click)="zoomOut()">-</button>
+      <button type="button" class="toolbar-icon" title="Ajustar vista" (click)="resetView()">Fit</button>
+      <button type="button" class="toolbar-icon" title="Acercar" (click)="zoomIn()">+</button>
+    </aside>
+
+    <div class="designer-stage">
+      <app-bpmn-editor
+        [processName]="editorProcessName"
+        [processId]="currentProcessId"
+        [processKey]="currentProcessKey"
+        [processVersion]="currentProcessVersion"
+        [processState]="currentProcessState"
+        [readonlyMode]="isReadonlyProcess"
+        [autoCreateDiagram]="false"
+      />
+
+      <section class="process-chip" *ngIf="currentProcessKey || processName">
+        <span class="process-chip__label">
+          {{ currentProcessState === 'BORRADOR' ? 'Editando borrador' : 'Solo lectura' }}
+        </span>
+        <strong>{{ editorProcessName }}</strong>
+        <span class="process-chip__meta" *ngIf="currentProcessKey">
+          {{ currentProcessKey }} · v{{ currentProcessVersion || 1 }} · {{ currentProcessState }}
+        </span>
+      </section>
+
+      <aside class="overlay-panel" *ngIf="isImportPanelOpen">
+        <div class="panel-header">
+          <h3>Importar XML del diagrama</h3>
+          <p>Pega el XML interno del proceso y cargalo en el modelador UML.</p>
+        </div>
+
+        <textarea
+          [(ngModel)]="importXmlValue"
+          class="xml-input"
+          rows="16"
+          spellcheck="false"
+          placeholder="Pega aqui el XML del diagrama"
+        ></textarea>
+
+        <div class="panel-actions">
+          <button type="button" class="toolbar-button accent" (click)="onImportXml()" [disabled]="isBusy">
+            Cargar XML
+          </button>
+        </div>
+      </aside>
+
+      <section class="overlay-panel export-overlay" *ngIf="isExportPanelOpen">
+        <div class="panel-header">
+          <h3>XML exportado del diagrama</h3>
+          <p>Este contenido interno ya puede enviarse al backend para persistirse.</p>
+        </div>
+
+        <textarea
+          [ngModel]="exportedXml"
+          class="xml-output"
+          rows="10"
+          readonly
+          spellcheck="false"
+        ></textarea>
+      </section>
+
+      <aside class="overlay-panel ai-overlay" *ngIf="isAiEditPanelOpen">
+        <div class="panel-header">
+          <h3>IA UML 2.5 sobre el lienzo actual</h3>
+          <p>
+            Puedes pedir desde cero o sobre el diagrama actual. Ejemplo: "creame una actividad de compra con particiones de ventas,
+            gerencia y facturación" o "agrega una accion de aprobacion en gerencia".
+          </p>
+          <p class="warning-note">La IA siempre trabajará sobre el XML interno actual del editor y luego podrás cargar la versión resultante.</p>
+        </div>
+
+        <section class="voice-assistant-panel">
+          <div class="voice-assistant-panel__header">
+            <div>
+              <span class="voice-assistant-panel__eyebrow">Entrada por voz</span>
+              <strong>Dicta la instrucción y revísala antes de aplicarla</strong>
+            </div>
+            <button
+              type="button"
+              class="voice-toggle-button"
+              [class.voice-toggle-button--recording]="isVoiceRecording"
+              (click)="toggleVoiceCapture()"
+              [disabled]="isAiEditing || !isVoiceInputSupported"
+            >
+              {{ isVoiceRecording ? 'Detener micrófono' : 'Usar micrófono' }}
+            </button>
+          </div>
+
+          <p class="voice-assistant-panel__hint" *ngIf="isVoiceInputSupported">
+            {{ isVoiceRecording ? 'Escuchando en tiempo real. Cuando termines, detén la grabación y decide si anexas el texto al prompt.' : 'Puedes hablar en español y luego decidir si agregas esa transcripción al prompt editable.' }}
+          </p>
+          <p class="voice-assistant-panel__hint voice-assistant-panel__hint--warning" *ngIf="!isVoiceInputSupported">
+            Tu navegador no expone reconocimiento de voz para esta pantalla. El flujo IA sigue funcionando con texto manual.
+          </p>
+          <p class="voice-assistant-panel__error" *ngIf="aiVoiceErrorMessage">{{ aiVoiceErrorMessage }}</p>
+
+          <div class="voice-transcript-card" *ngIf="isVoiceRecording || aiVoiceTranscriptPreview">
+            <div class="voice-transcript-card__header">
+              <span>Transcripción detectada</span>
+              <button
+                *ngIf="aiVoiceTranscriptPreview"
+                type="button"
+                class="voice-link-button"
+                (click)="appendVoiceTranscript()"
+                [disabled]="isAiEditing"
+              >
+                Pasar al prompt
+              </button>
+            </div>
+            <p>{{ aiVoiceTranscriptPreview || 'Esperando que comiences a hablar...' }}</p>
+          </div>
+        </section>
+
+        <textarea
+          [(ngModel)]="aiEditInstruction"
+          class="xml-input"
+          rows="12"
+          spellcheck="false"
+          placeholder="Ej. agrega una accion de aprobacion en Gerencia"
+        ></textarea>
+
+        <div class="panel-actions">
+          <button type="button" class="toolbar-button" (click)="closeAiEditPanel()" [disabled]="isAiEditing">
+            Cancelar
+          </button>
+          <button type="button" class="toolbar-button accent" (click)="editDiagramWithAi()" [disabled]="isAiEditing">
+            {{ isAiEditing ? 'Procesando...' : 'Aplicar IA' }}
+          </button>
+        </div>
+      </aside>
+
+      <aside class="overlay-panel analysis-overlay" *ngIf="isAiAnalysisPanelOpen && aiAnalysisResult">
+        <div class="panel-header analysis-header">
+          <div>
+            <h3>Analisis inteligente</h3>
+            <p>{{ aiAnalysisResult.summary }}</p>
+          </div>
+          <button type="button" class="panel-close" (click)="closeAiAnalysisPanel()">×</button>
+        </div>
+
+        <div class="analysis-score" [ngClass]="'analysis-score--' + getScoreTone(aiAnalysisResult.score)">
+          <span>Score</span>
+          <strong>{{ aiAnalysisResult.score }}/100</strong>
+        </div>
+
+        <section class="analysis-section">
+          <h4>Problemas detectados</h4>
+          <p class="analysis-empty" *ngIf="!aiAnalysisResult.issues.length">
+            No se detectaron problemas relevantes en este analisis.
+          </p>
+          <article class="analysis-item" *ngFor="let issue of aiAnalysisResult.issues">
+            <div class="analysis-item__header">
+              <span class="severity-pill" [ngClass]="'severity-pill--' + issue.severity">
+                {{ getSeverityLabel(issue.severity) }}
+              </span>
+              <strong>{{ issue.type }}</strong>
+            </div>
+            <p>{{ issue.description }}</p>
+            <button
+              *ngIf="issue.elementId"
+              type="button"
+              class="analysis-link"
+              (click)="highlightAnalysisElement(issue.elementId)"
+            >
+              Ver en diagrama
+            </button>
+          </article>
+        </section>
+
+        <section class="analysis-section">
+          <h4>Sugerencias</h4>
+          <p class="analysis-empty" *ngIf="!aiAnalysisResult.suggestions.length">
+            No hay sugerencias pendientes.
+          </p>
+          <article class="analysis-item" *ngFor="let suggestion of aiAnalysisResult.suggestions">
+            <strong>{{ suggestion.title }}</strong>
+            <p>{{ suggestion.description }}</p>
+            <small>{{ suggestion.impact }}</small>
+            <div class="analysis-item__meta">
+              <span class="analysis-chip" *ngIf="suggestion.proposedXml">XML propuesto disponible</span>
+              <span class="analysis-chip analysis-chip--muted" *ngIf="!suggestion.proposedXml">Sin XML propuesto</span>
+              <span class="analysis-chip analysis-chip--success" *ngIf="suggestion.canBeAppliedAutomatically">Aplicable automaticamente</span>
+            </div>
+            <div class="analysis-item__actions" *ngIf="suggestion.status !== 'APPLIED' && suggestion.status !== 'REJECTED'">
+              <button
+                type="button"
+                class="analysis-link analysis-link--reject"
+                (click)="rejectAnalysisSuggestion(suggestion)"
+                [disabled]="aiSuggestionActionId === suggestion.id || suggestion.status === 'APPLIED' || suggestion.status === 'REJECTED'"
+              >
+                {{ aiSuggestionActionId === suggestion.id && aiSuggestionActionType === 'reject' ? 'Rechazando...' : 'Rechazar' }}
+              </button>
+              <button
+                type="button"
+                class="analysis-link analysis-link--apply"
+                (click)="applyAnalysisSuggestion(suggestion)"
+                [disabled]="aiSuggestionActionId === suggestion.id || !canApplyAnalysisSuggestion(suggestion)"
+              >
+                {{ aiSuggestionActionId === suggestion.id && aiSuggestionActionType === 'apply' ? 'Aplicando...' : 'Aplicar sugerencia' }}
+              </button>
+            </div>
+            <div class="analysis-item__actions analysis-item__actions--processed" *ngIf="suggestion.status === 'APPLIED' || suggestion.status === 'REJECTED'">
+              <span class="analysis-chip analysis-chip--muted">Sugerencia {{ suggestion.status === 'APPLIED' ? 'aplicada' : 'rechazada' }}</span>
+            </div>
+            <button
+              *ngIf="suggestion.relatedElementId"
+              type="button"
+              class="analysis-link"
+              (click)="highlightAnalysisElement(suggestion.relatedElementId)"
+            >
+              Ver en diagrama
+            </button>
+          </article>
+        </section>
+      </aside>
+    </div>
+  </div>
+
+  <ng-container *ngIf="isAiEditing || isAiAnalyzing">
+    <div class="ai-loading-screen" role="status" aria-live="polite" aria-busy="true">
+      <div class="modal-backdrop modal-backdrop--strong"></div>
+
+      <section class="ai-loading-modal">
+        <div class="ai-loading-modal__spinner"></div>
+        <div class="ai-loading-modal__content">
+          <span class="ai-modal__eyebrow">IA UML</span>
+          <h3>{{ isAiAnalyzing ? 'Analizando proceso' : 'Procesando diagrama' }}</h3>
+          <p>{{ isAiAnalyzing ? 'Estamos revisando estructura, particiones, nodos de control y posibles cuellos de botella.' : (aiEditStatusMessage || 'Estamos generando la siguiente versión del diagrama.') }}</p>
+          <p class="ai-loading-modal__attempt" *ngIf="!isAiAnalyzing">Intento: {{ aiEditAttempt }}/2</p>
+          <p class="ai-loading-modal__hint" *ngIf="!isAiAnalyzing">
+            Si tardara demasiado, puedes cancelar y volver a intentarlo.
+          </p>
+        </div>
+        <div class="ai-loading-modal__actions">
+          <button type="button" class="toolbar-button" *ngIf="isAiEditing" (click)="cancelAiEdit()">Cancelar</button>
+          <button type="button" class="toolbar-button" *ngIf="isAiAnalyzing" (click)="cancelAiAnalysis()">Cancelar análisis</button>
+        </div>
+      </section>
+    </div>
+  </ng-container>
+
+  <app-process-dialogs
+    [saveDialogOpen]="isSaveDialogOpen"
+    [importConfirmOpen]="isImportConfirmOpen"
+    [saving]="isSaving"
+    [importXml]="importXmlValue"
+    [processName]="processName"
+    [currentProcessId]="currentProcessId"
+    [saveDialogName]="saveDialogName"
+    [saveDialogDescription]="saveDialogDescription"
+    [saveDialogStatus]="saveDialogStatus"
+    [saveDialogMessage]="saveDialogMessage"
+    [errorMessage]="errorMessage"
+    [successMessage]="successMessage"
+    [processContext]="processContext"
+    (saveDialogNameChange)="saveDialogName = $event"
+    (saveDialogDescriptionChange)="saveDialogDescription = $event"
+    (importXmlChange)="importXmlValue = $event"
+    (cancelSave)="closeSaveDialog()"
+    (confirmSave)="confirmSaveProcess()"
+    (cancelImport)="closeImportConfirm()"
+    (confirmImport)="confirmImportOverwrite()"
+  />
+
+  <ng-container *ngIf="isAiEditPreviewOpen">
+    <div class="modal-backdrop modal-backdrop--strong" (click)="isAiEditPreviewOpen = false"></div>
+
+    <section
+      class="ai-modal"
+      role="dialog"
+      aria-modal="true"
+      aria-labelledby="ai-edit-confirm-title"
+    >
+      <div class="ai-modal__header">
+        <span class="ai-modal__eyebrow">IA UML</span>
+        <h3 id="ai-edit-confirm-title">Confirmar resultado de IA</h3>
+        <p>
+          La IA preparó una nueva versión del XML actual. Si la cargas, reemplazarás el contenido del editor por el
+          resultado generado.
+        </p>
+      </div>
+
+      <div class="ai-modal__preview">
+        <div class="ai-modal__preview-label">Instrucción</div>
+        <div class="ai-modal__preview-text">{{ aiEditInstruction }}</div>
+      </div>
+
+      <div class="ai-modal__note">
+        Revisa que los ids, particiones, formularios y conexiones sigan coherentes antes de continuar.
+      </div>
+
+      <div class="ai-modal__actions">
+        <button type="button" class="toolbar-button" (click)="isAiEditPreviewOpen = false">Cancelar</button>
+        <button type="button" class="toolbar-button accent" (click)="confirmAiEditImport()">
+          Cargar resultado
+        </button>
+      </div>
+    </section>
+  </ng-container>
+</section>
+
+
+
+
+
+
+

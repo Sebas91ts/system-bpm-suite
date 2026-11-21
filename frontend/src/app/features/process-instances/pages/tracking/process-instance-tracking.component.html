@@ -1,0 +1,46 @@
+<div class="tracking-page">
+  <section class="tracking-hero">
+    <div class="tracking-hero__copy">
+      <p class="eyebrow">{{ t('tracking.title') }}</p>
+      <h1>{{ tracking?.nombreProceso || t('tracking.process') }}</h1>
+      <p class="hero-copy">{{ t('tracking.subtitle') }}</p>
+
+      <div class="sync-strip">
+        <span class="sync-badge">
+          <i></i>
+          {{ t('tracking.sync') }}
+        </span>
+        <span class="sync-text">{{ t('tracking.lastUpdate') }} {{ formatLastUpdate() }}</span>
+      </div>
+    </div>
+
+    <div class="tracking-toolbar">
+      <button type="button" class="ghost-btn" (click)="goBack()">{{ t('tracking.back') }}</button>
+      <button type="button" class="primary-btn" (click)="refresh()">
+        {{ refreshInProgress ? t('user.updating') : t('tracking.refresh') }}
+      </button>
+    </div>
+  </section>
+
+  <div class="status-card" *ngIf="loading && !tracking">{{ t('tracking.loading') }}</div>
+  <div class="status-card error" *ngIf="errorMessage">{{ errorMessage }}</div>
+
+  <ng-container *ngIf="tracking as item">
+    <app-process-tracking-summary [tracking]="item"></app-process-tracking-summary>
+
+    <section class="tracking-main">
+      <app-process-tracking-viewer
+        class="tracking-main__viewer"
+        [xml]="item.xmlBpmn || ''"
+        [completedTaskKeys]="item.completedTaskKeys"
+        [activeTaskKeys]="item.activeTaskKeys"
+        [pendingTaskKeys]="item.pendingTaskKeys">
+      </app-process-tracking-viewer>
+
+      <app-process-tracking-timeline
+        class="tracking-main__timeline"
+        [history]="item.history">
+      </app-process-tracking-timeline>
+    </section>
+  </ng-container>
+</div>

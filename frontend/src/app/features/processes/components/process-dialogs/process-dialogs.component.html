@@ -1,0 +1,159 @@
+<ng-container *ngIf="saveDialogOpen">
+  <div class="modal-backdrop" (click)="cancelSave.emit()"></div>
+
+  <section class="save-modal" role="dialog" aria-modal="true" aria-labelledby="save-title">
+    <div class="save-modal__header">
+      <h3 id="save-title">{{ currentProcessId ? 'Actualizar proceso BPMN' : 'Guardar proceso BPMN' }}</h3>
+      <p>
+        {{ currentProcessId
+          ? 'Estas editando un proceso existente. Si confirmas, se actualizara el XML guardado en MongoDB.'
+          : 'Confirma el nombre antes de guardar el XML en MongoDB. El guardado se confirma o se rechaza dentro de este mismo modal.' }}
+      </p>
+      <div *ngIf="processContext" class="save-modal__context">{{ processContext }}</div>
+    </div>
+
+    <label class="save-modal__field">
+      <span>Nombre del proceso</span>
+      <input
+        type="text"
+        id="process-save-name"
+        name="process-save-name"
+        autocomplete="off"
+        [ngModel]="saveDialogName"
+        (ngModelChange)="saveDialogNameChange.emit($event)"
+        placeholder="Ej. Proceso de ventas"
+        title="Nombre del proceso"
+        autofocus
+        [disabled]="saving"
+      />
+    </label>
+
+    <label class="save-modal__field">
+      <span>Descripción del proceso</span>
+      <textarea
+        id="process-save-description"
+        name="process-save-description"
+        rows="4"
+        autocomplete="off"
+        [ngModel]="saveDialogDescription"
+        (ngModelChange)="saveDialogDescriptionChange.emit($event)"
+        placeholder="Opcional. Describe brevemente para qué sirve el proceso."
+        title="Descripción del proceso"
+        [disabled]="saving"
+      ></textarea>
+    </label>
+
+    <div
+      *ngIf="saveDialogMessage"
+      class="save-modal__status"
+      [class.saving]="saveDialogStatus === 'saving'"
+      [class.success]="saveDialogStatus === 'success'"
+      [class.error]="saveDialogStatus === 'error'"
+    >
+      {{ saveDialogMessage }}
+    </div>
+
+    <div class="save-modal__actions">
+      <button type="button" class="toolbar-button" (click)="cancelSave.emit()" [disabled]="saving">Cancelar</button>
+      <button
+        type="button"
+        class="toolbar-button accent"
+        (click)="confirmSave.emit()"
+        [disabled]="!saveDialogName.trim() || saving"
+      >
+        {{ saving ? 'Guardando...' : (currentProcessId ? 'Confirmar actualizacion' : 'Confirmar guardado') }}
+      </button>
+    </div>
+  </section>
+</ng-container>
+
+<ng-container *ngIf="importConfirmOpen">
+  <div class="modal-backdrop" (click)="cancelImport.emit()"></div>
+
+  <section class="save-modal confirm-modal" role="dialog" aria-modal="true" aria-labelledby="import-confirm-title">
+    <div class="save-modal__header">
+      <h3 id="import-confirm-title">Confirmar importacion</h3>
+      <p>
+        Estas editando el proceso <strong>{{ processName }}</strong>. Si importas este XML,
+        reemplazaras el diagrama actual dentro de este mismo proceso.
+      </p>
+      <div *ngIf="processContext" class="save-modal__context">{{ processContext }}</div>
+    </div>
+
+    <div class="save-modal__status saving">
+      El proceso seguira siendo el mismo. Solo se reemplazara el contenido BPMN para que luego puedas actualizarlo.
+    </div>
+
+    <div class="save-modal__actions">
+      <button type="button" class="toolbar-button" (click)="cancelImport.emit()">Cancelar</button>
+      <button type="button" class="toolbar-button accent" (click)="confirmImport.emit()">
+        Si, reemplazar XML
+      </button>
+    </div>
+  </section>
+</ng-container>
+
+<ng-container *ngIf="newProcessDialogOpen">
+  <div class="modal-backdrop" (click)="cancelNewProcess.emit()"></div>
+
+  <section class="save-modal confirm-modal" role="dialog" aria-modal="true" aria-labelledby="new-process-title">
+    <div class="save-modal__header">
+      <h3 id="new-process-title">Crear nuevo proceso</h3>
+      <p>
+        Define el nombre del proceso. El backend generara automaticamente su <strong>processKey</strong>
+        y creara la primera version en estado borrador.
+      </p>
+      <div *ngIf="processContext" class="save-modal__context">{{ processContext }}</div>
+    </div>
+
+    <label class="save-modal__field">
+      <span>Nombre del proceso</span>
+      <input
+        type="text"
+        id="process-new-name"
+        name="process-new-name"
+        autocomplete="off"
+        [ngModel]="newProcessName"
+        (ngModelChange)="newProcessNameChange.emit($event)"
+        placeholder="Ej. Proceso de ventas"
+        title="Nombre del proceso"
+        autofocus
+        [disabled]="saving"
+      />
+    </label>
+
+    <label class="save-modal__field">
+      <span>Descripción del proceso</span>
+      <textarea
+        id="process-new-description"
+        name="process-new-description"
+        rows="4"
+        autocomplete="off"
+        [ngModel]="newProcessDescription"
+        (ngModelChange)="newProcessDescriptionChange.emit($event)"
+        placeholder="Opcional. Describe brevemente para qué sirve el proceso."
+        title="Descripción del proceso"
+        [disabled]="saving"
+      ></textarea>
+    </label>
+
+    <div *ngIf="saveDialogMessage" class="save-modal__status" [class.saving]="saveDialogStatus === 'saving'" [class.success]="saveDialogStatus === 'success'" [class.error]="saveDialogStatus === 'error'">
+      {{ saveDialogMessage }}
+    </div>
+
+    <div class="save-modal__actions">
+      <button type="button" class="toolbar-button" (click)="cancelNewProcess.emit()" [disabled]="saving">Cancelar</button>
+      <button
+        type="button"
+        class="toolbar-button accent"
+        (click)="confirmNewProcess.emit()"
+        [disabled]="!newProcessName.trim() || saving"
+      >
+        {{ saving ? 'Creando...' : 'Crear proceso' }}
+      </button>
+    </div>
+  </section>
+</ng-container>
+
+<div *ngIf="errorMessage" class="status-banner error">{{ errorMessage }}</div>
+<div *ngIf="successMessage" class="status-banner success">{{ successMessage }}</div>

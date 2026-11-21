@@ -1,0 +1,54 @@
+<aside class="process-list-panel">
+  <div class="panel-header">
+    <h3>{{ t('processes.families') }}</h3>
+    <p>{{ t('processes.subtitle') }}</p>
+  </div>
+
+  <div class="process-list-state" *ngIf="loading">
+    <strong>{{ t('processes.loading') }}</strong>
+  </div>
+
+  <div class="process-list-state" *ngIf="!loading && !procesos.length">
+    <strong>{{ t('processes.emptyTitle') }}</strong>
+    <p>{{ t('processes.emptyDescription') }}</p>
+  </div>
+
+  <div class="process-family-grid" *ngIf="!loading && procesos.length">
+    <article
+      class="process-family-card"
+      *ngFor="let group of groupedFamilies"
+      (click)="openFamily(group.processKey)"
+    >
+      <div class="process-family-card__top">
+        <div>
+          <span class="process-family-card__eyebrow">{{ group.processKey }}</span>
+          <h4>{{ group.procesos[0]?.nombre || group.processKey }}</h4>
+          <p class="process-family-card__description">
+            {{ group.latest.descripcion || 'Sin descripcion disponible.' }}
+          </p>
+        </div>
+        <span class="pill pill--draft">{{ group.procesos.length }} {{ group.procesos.length === 1 ? t('processes.version') : t('processes.versions') }}</span>
+      </div>
+
+      <div class="process-family-card__meta">
+        <span>
+          {{ t('processes.lastActivity') }}
+          <strong>{{ group.latest.updatedAt || group.latest.createdAt }}</strong>
+        </span>
+        <span>{{ t('processes.visibleCount') }}: {{ group.procesos.length }}</span>
+      </div>
+
+      <div class="process-family-card__badges">
+        <span class="pill pill--draft">{{ t('processes.statusDraft') }}: {{ countByState(group.procesos, 'BORRADOR') }}</span>
+        <span class="pill pill--published">{{ t('processes.statusPublished') }}: {{ countByState(group.procesos, 'PUBLICADO') }}</span>
+        <span class="pill pill--historic">{{ t('processes.statusHistoric') }}: {{ countByState(group.procesos, 'HISTORICO') }}</span>
+      </div>
+
+      <div class="process-family-card__footer">
+        <button type="button" class="family-action accent" (click)="$event.stopPropagation(); openFamily(group.processKey)">
+          {{ t('processes.viewDetails') }}
+        </button>
+      </div>
+    </article>
+  </div>
+</aside>
