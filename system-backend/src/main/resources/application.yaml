@@ -44,7 +44,7 @@ server:
 # CONFIGURACIÓN DE JWT (Personalizada)
 # ==========================================
 jwt:
-  secret: ${JWT_SECRET:REDACTED}
+  secret: ${JWT_SECRET}
   expiration: ${JWT_EXPIRATION:86400000}
   prefix: ${JWT_PREFIX:Bearer }
 
@@ -96,8 +96,8 @@ ai:
 
 cloudinary:
   cloud-name: ${CLOUDINARY_CLOUD_NAME:dpicsykwa}
-  api-key: ${CLOUDINARY_API_KEY:REDACTED}
-  api-secret: ${CLOUDINARY_API_SECRET:REDACTED}
+  api-key: ${CLOUDINARY_API_KEY}
+  api-secret: ${CLOUDINARY_API_SECRET}
 
 ---
 # ==========================================

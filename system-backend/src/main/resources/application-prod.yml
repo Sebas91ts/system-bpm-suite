@@ -13,7 +13,7 @@ camunda:
   bpm:
     admin-user:
       id: admin
-      password: ${CAMUNDA_ADMIN_PASSWORD:admin}
+      password: ${CAMUNDA_ADMIN_PASSWORD}
       firstName: Admin
     filter:
       create: All tasks
