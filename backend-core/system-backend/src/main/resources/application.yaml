@@ -1,0 +1,146 @@
+# ==========================================
+# CONFIGURACIÓN PRINCIPAL - system-backend
+# ==========================================
+
+spring:
+  application:
+    name: system-backend
+
+  config:
+    import: optional:file:./.env[.properties],optional:file:./system-backend/.env[.properties]
+
+  profiles:
+    active: ${SPRING_PROFILES_ACTIVE:dev}
+
+  # ==========================================
+  # CONFIGURACIÓN DE MONGODB
+  # ==========================================
+  data:
+    mongodb:
+      uri: ${MONGODB_URI:mongodb://localhost:27017}
+      database: ${MONGODB_DATABASE:systembpm_db}
+  servlet:
+    multipart:
+      max-file-size: ${SPRING_SERVLET_MULTIPART_MAX_FILE_SIZE:10MB}
+      max-request-size: ${SPRING_SERVLET_MULTIPART_MAX_REQUEST_SIZE:10MB}
+
+# ==========================================
+# CONFIGURACIÓN DE LOGGING
+# ==========================================
+logging:
+  level:
+    root: INFO
+    com.systembpm.system: DEBUG
+    org.springframework.data.mongodb.core.MongoTemplate: WARN
+
+# ==========================================
+# CONFIGURACIÓN DEL SERVIDOR
+# ==========================================
+server:
+  port: ${SERVER_PORT:8080}
+  forward-headers-strategy: framework
+
+# ==========================================
+# CONFIGURACIÓN DE JWT (Personalizada)
+# ==========================================
+jwt:
+  secret: ${JWT_SECRET}
+  expiration: ${JWT_EXPIRATION:86400000}
+  prefix: ${JWT_PREFIX:Bearer }
+
+camunda:
+  base-url: ${CAMUNDA_BASE_URL:http://localhost:8081/engine-rest}
+  history-time-to-live-days: ${CAMUNDA_HISTORY_TIME_TO_LIVE_DAYS:180}
+
+onlyoffice:
+  enabled: ${ONLYOFFICE_ENABLED:false}
+  document-server-url: ${ONLYOFFICE_DOCUMENT_SERVER_URL:http://localhost:8082}
+  jwt-secret: ${ONLYOFFICE_JWT_SECRET:}
+  callback-url: ${ONLYOFFICE_CALLBACK_URL:http://localhost:8080/api/onlyoffice/callback}
+
+fastapi:
+  base-url: ${FASTAPI_BASE_URL:http://localhost:8000}
+
+app:
+  push:
+    firebase:
+      enabled: ${FIREBASE_ENABLED:false}
+      service-account-base64: ${FIREBASE_SERVICE_ACCOUNT_BASE64:}
+      project-id: ${FIREBASE_PROJECT_ID:}
+  document:
+    max-file-size-bytes: ${DOCUMENT_MAX_FILE_SIZE_BYTES:10485760}
+    allowed-content-types:
+      - application/pdf
+      - application/vnd.openxmlformats-officedocument.wordprocessingml.document
+      - application/vnd.openxmlformats-officedocument.spreadsheetml.sheet
+      - text/csv
+      - image/*
+      - video/*
+    storage:
+      s3:
+        bucket: ${AWS_S3_BUCKET:}
+        region: ${AWS_REGION:us-east-1}
+        path-style-access-enabled: ${AWS_S3_PATH_STYLE:false}
+        access-key: ${AWS_ACCESS_KEY_ID:}
+        secret-key: ${AWS_SECRET_ACCESS_KEY:}
+    signed-url:
+      expiration-minutes: ${AWS_S3_SIGNED_URL_EXPIRATION_MINUTES:15}
+
+ai:
+  analysis:
+    enabled: ${AI_ANALYSIS_ENABLED:true}
+    auto-enabled: ${AI_ANALYSIS_AUTO_ENABLED:true}
+    schedule-ms: ${AI_ANALYSIS_SCHEDULE_MS:21600000}
+    min-score-notify: ${AI_ANALYSIS_MIN_SCORE_NOTIFY:70}
+    notify-severity: ${AI_ANALYSIS_NOTIFY_SEVERITY:high}
+
+cloudinary:
+  cloud-name: ${CLOUDINARY_CLOUD_NAME:dpicsykwa}
+  api-key: ${CLOUDINARY_API_KEY}
+  api-secret: ${CLOUDINARY_API_SECRET}
+
+---
+# ==========================================
+# PERFIL DE DESARROLLO (dev)
+# ==========================================
+spring:
+  config:
+    activate:
+      on-profile: dev
+  devtools:
+    restart:
+      enabled: false
+
+  data:
+    mongodb:
+      uri: ${MONGODB_URI:mongodb://localhost:27017}
+      database: ${MONGODB_DATABASE:test}
+
+logging:
+  level:
+    root: INFO
+    com.systembpm.system: DEBUG
+    org.springframework.security: DEBUG
+
+---
+# ==========================================
+# PERFIL DE PRODUCCIÓN (prod)
+# ==========================================
+spring:
+  config:
+    activate:
+      on-profile: prod
+
+  data:
+    mongodb:
+      uri: ${MONGODB_URI}
+      database: ${MONGODB_DATABASE}
+
+logging:
+  level:
+    root: WARN
+    com.systembpm.system: INFO
+    org.springframework.security: WARN
+
+server:
+  port: ${SERVER_PORT:8080}

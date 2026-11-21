@@ -1,0 +1,126 @@
+package com.systembpm.system.modules.process.infrastructure.controller;
+
+import com.systembpm.system.common.response.ApiResponse;
+import com.systembpm.system.modules.process.application.dto.ProcesoCreateDto;
+import com.systembpm.system.modules.process.application.service.IProcesoService;
+import com.systembpm.system.modules.process.domain.Proceso;
+import jakarta.validation.Valid;
+import lombok.RequiredArgsConstructor;
+import lombok.extern.slf4j.Slf4j;
+import org.springframework.http.HttpStatus;
+import org.springframework.http.ResponseEntity;
+import org.springframework.security.core.Authentication;
+import org.springframework.web.bind.annotation.GetMapping;
+import org.springframework.web.bind.annotation.PathVariable;
+import org.springframework.web.bind.annotation.PostMapping;
+import org.springframework.web.bind.annotation.PutMapping;
+import org.springframework.web.bind.annotation.RequestBody;
+import org.springframework.web.bind.annotation.RequestMapping;
+import org.springframework.web.bind.annotation.RestController;
+
+import java.util.List;
+
+/**
+ * Controlador REST para persistir procesos BPMN.
+ */
+@Slf4j
+@RestController
+@RequestMapping("/api/procesos")
+@RequiredArgsConstructor
+public class ProcesoController {
+
+    private final IProcesoService procesoService;
+
+    /**
+     * Guarda un proceso BPMN en MongoDB.
+     *
+     * POST /api/procesos
+     */
+    @PostMapping
+    public ResponseEntity<ApiResponse<Proceso>> guardarProceso(
+            @Valid @RequestBody ProcesoCreateDto dto) {
+        log.info("Solicitud POST /api/procesos para proceso: {}", dto.getNombre());
+
+        Proceso procesoGuardado = procesoService.guardar(dto);
+
+        return ResponseEntity.status(HttpStatus.CREATED)
+                .body(ApiResponse.success("Proceso BPMN guardado exitosamente", procesoGuardado));
+    }
+
+    @GetMapping
+    public ResponseEntity<ApiResponse<List<Proceso>>> listarProcesos() {
+        log.info("Solicitud GET /api/procesos");
+
+        List<Proceso> procesos = procesoService.listar();
+
+        return ResponseEntity.ok(ApiResponse.success("Procesos obtenidos exitosamente", procesos));
+    }
+
+    @GetMapping("/publicados")
+    public ResponseEntity<ApiResponse<List<Proceso>>> listarProcesosPublicados() {
+        log.info("Solicitud GET /api/procesos/publicados");
+
+        List<Proceso> procesos = procesoService.listarPublicados();
+
+        return ResponseEntity.ok(ApiResponse.success("Procesos publicados obtenidos exitosamente", procesos));
+    }
+
+    @GetMapping("/{id}")
+    public ResponseEntity<ApiResponse<Proceso>> obtenerProceso(@PathVariable String id) {
+        log.info("Solicitud GET /api/procesos/{}", id);
+
+        Proceso proceso = procesoService.obtenerPorId(id);
+
+        return ResponseEntity.ok(ApiResponse.success("Proceso obtenido exitosamente", proceso));
+    }
+
+    @PutMapping("/{id}")
+    public ResponseEntity<ApiResponse<Proceso>> actualizarProceso(
+            @PathVariable String id,
+            @Valid @RequestBody ProcesoCreateDto dto,
+            Authentication authentication) {
+        log.info("Solicitud PUT /api/procesos/{} para proceso: {}", id, dto.getNombre());
+        dto.setLastSavedBy(resolveAuthenticatedUser(authentication, dto.getLastSavedBy()));
+
+        Proceso procesoActualizado = procesoService.actualizar(id, dto);
+
+        return ResponseEntity.ok(ApiResponse.success("Proceso BPMN actualizado exitosamente", procesoActualizado));
+    }
+
+    @PutMapping("/{id}/autosave")
+    public ResponseEntity<ApiResponse<Proceso>> autosaveProceso(
+            @PathVariable String id,
+            @RequestBody ProcesoCreateDto dto,
+            Authentication authentication) {
+        log.info("Solicitud PUT /api/procesos/{}/autosave", id);
+        dto.setLastSavedBy(resolveAuthenticatedUser(authentication, dto.getLastSavedBy()));
+
+        Proceso procesoActualizado = procesoService.autosave(id, dto);
+
+        return ResponseEntity.ok(ApiResponse.success("Proceso BPMN guardado automaticamente", procesoActualizado));
+    }
+
+    @PutMapping("/{id}/publicar")
+    public ResponseEntity<ApiResponse<Proceso>> publicarProceso(@PathVariable String id) {
+        Proceso procesoPublicado = procesoService.publicarYDesplegar(id);
+        return ResponseEntity.ok(ApiResponse.success("Proceso publicado y desplegado en Camunda exitosamente", procesoPublicado));
+    }
+
+    @PostMapping("/{id}/versionar")
+    public ResponseEntity<ApiResponse<Proceso>> versionarProceso(@PathVariable String id) {
+        log.info("Solicitud POST /api/procesos/{}/versionar", id);
+
+        Proceso nuevaVersion = procesoService.crearNuevaVersion(id);
+
+        return ResponseEntity.status(HttpStatus.CREATED)
+                .body(ApiResponse.success("Nueva version del proceso creada exitosamente", nuevaVersion));
+    }
+
+    private String resolveAuthenticatedUser(Authentication authentication, String fallback) {
+        if (authentication != null && authentication.getName() != null && !authentication.getName().isBlank()) {
+            return authentication.getName();
+        }
+
+        return fallback;
+    }
+}

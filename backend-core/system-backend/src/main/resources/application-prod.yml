@@ -1,0 +1,42 @@
+server:
+  port: ${SERVER_PORT:8080}
+  forward-headers-strategy: framework
+
+spring:
+  config:
+    import: optional:file:.env,optional:file:system-backend/.env
+  data:
+    mongodb:
+      uri: ${MONGODB_URI}
+
+camunda:
+  bpm:
+    admin-user:
+      id: admin
+      password: ${CAMUNDA_ADMIN_PASSWORD}
+      firstName: Admin
+    filter:
+      create: All tasks
+    webapp:
+      index-redirect-enabled: true
+    generic-properties:
+      properties:
+        historyTimeToLive: P30D
+
+app:
+  push:
+    firebase:
+      enabled: ${FIREBASE_ENABLED:false}
+      service-account-base64: ${FIREBASE_SERVICE_ACCOUNT_BASE64:}
+      project-id: ${FIREBASE_PROJECT_ID:}
+
+  fastapi:
+    url: ${FASTAPI_URL:http://127.0.0.1:8000}
+
+ai:
+  analysis:
+    enabled: ${AI_ANALYSIS_ENABLED:true}
+    auto-enabled: ${AI_ANALYSIS_AUTO_ENABLED:true}
+    schedule-ms: ${AI_ANALYSIS_SCHEDULE_MS:21600000}
+    min-score-notify: ${AI_ANALYSIS_MIN_SCORE_NOTIFY:70}
+    notify-severity: ${AI_ANALYSIS_NOTIFY_SEVERITY:high}
