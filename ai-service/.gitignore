@@ -21,3 +21,6 @@ htmlcov/
 
 # Logs
 *.log
+
+# Keep the environment template
+!.env.example
