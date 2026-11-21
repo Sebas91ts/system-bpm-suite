@@ -1,0 +1,29 @@
+{
+  "project_info": {
+    "project_number": "1058290704669",
+    "project_id": "bpmn-e99de",
+    "storage_bucket": "bpmn-e99de.firebasestorage.app"
+  },
+  "client": [
+    {
+      "client_info": {
+        "mobilesdk_app_id": "1:1058290704669:android:439d5100174925254841f4",
+        "android_client_info": {
+          "package_name": "com.example.sysyem_movile"
+        }
+      },
+      "oauth_client": [],
+      "api_key": [
+        {
+          "current_key": "AIzaSyAojz0P7gecKlDfbuafvyGL36rndsueQbg"
+        }
+      ],
+      "services": {
+        "appinvite_service": {
+          "other_platform_oauth_client": []
+        }
+      }
+    }
+  ],
+  "configuration_version": "1"
+}
